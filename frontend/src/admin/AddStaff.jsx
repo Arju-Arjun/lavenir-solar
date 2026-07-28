@@ -49,7 +49,7 @@ const AddStaff = ({ onCancel }) => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('${import.meta.env.VITE_API_BASE_URL}//api/staff/add', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/staff/add`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

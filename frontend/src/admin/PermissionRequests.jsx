@@ -36,7 +36,7 @@ const PermissionRequests = () => {
   const fetchRequestsWorkspace = async () => {
     setLoading(true);
     try {
-      const response = await fetch('${import.meta.env.VITE_API_BASE_URL}//api/staff/permissions/requests/all', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/staff/permissions/requests/all`, {
         method: 'GET',
         headers: getAuthHeaders(null) // No content-type needed for simple GET operations
       });

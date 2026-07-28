@@ -71,7 +71,7 @@ export default function AddCustomer({ onCancel, onSuccess }) {
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('${import.meta.env.VITE_API_BASE_URL}//api/customers/', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/customers/`, {
         method: 'POST',
         headers: {
           'Authorization': token ? `Bearer ${token}` : '' // Secure JWT Auth handshake

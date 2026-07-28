@@ -37,7 +37,7 @@ const PermissionManagement = () => {
       setError(null);
       const token = localStorage.getItem('token');
       
-      const response = await fetch('${import.meta.env.VITE_API_BASE_URL}//api/staff/all', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/staff/all`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,

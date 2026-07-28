@@ -51,7 +51,7 @@ const StaffDirectory = () => {
   const fetchStaffData = async () => {
     setLoading(true);
     try {
-      const response = await fetch('${import.meta.env.VITE_API_BASE_URL}//api/staff/all');
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/staff/all`);
       if (!response.ok) throw new Error('Failed to synchronize directory records.');
       const data = await response.json();
       setStaffList(data);
