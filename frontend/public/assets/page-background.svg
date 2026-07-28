@@ -1,0 +1,21 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgFade" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F4F8FC"/>
+      <stop offset="55%" stop-color="#EEF3F8"/>
+      <stop offset="100%" stop-color="#FBF3E6"/>
+    </linearGradient>
+    <pattern id="panelGrid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <rect width="60" height="60" fill="none"/>
+      <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#0C447C" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="sunGlow" cx="85%" cy="10%" r="60%">
+      <stop offset="0%" stop-color="#EF9F27" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#EF9F27" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bgFade)"/>
+  <rect width="1600" height="900" fill="url(#panelGrid)"/>
+  <rect width="1600" height="900" fill="url(#sunGlow)"/>
+</svg>

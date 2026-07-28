@@ -1,0 +1,20 @@
+# Python / Flask cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+
+# Environment variables (Very Important for security)
+backend/.env
+.env
+
+# Node modules (Frontend dependencies)
+frontend/node_modules/
+frontend/dist/
+
+# OS generated files
+Thumbs.db
+.DS_Store
