@@ -50,6 +50,12 @@ CORS(app, resources={
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# FIX: Added engine_options to prevent SSL EOF / connection timeout errors on Render
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+}
+
 
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "fallback_secret_key")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30) 
@@ -103,6 +109,4 @@ def health_check():
     }), 200
 
 if __name__ == '__main__':
-    # use_reloader=False: prevents the scheduler from starting twice under
-    # the Werkzeug dev-server auto-reloader (which spawns a second process).
     app.run(debug=True, port=5000, use_reloader=False)
