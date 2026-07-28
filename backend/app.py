@@ -39,7 +39,7 @@ app = Flask(__name__)
 # FIX: Explicitly allow the Authorization header and cross-origin preflight requests
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173","http://localhost:4173", "http://127.0.0.1:4173"],  # Match your React dev server port
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173","http://localhost:4173", "http://127.0.0.1:4173","https://lavenir-solar-rho.vercel.app"],  # Match your React dev server port
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
