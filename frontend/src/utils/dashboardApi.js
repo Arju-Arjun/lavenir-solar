@@ -1,12 +1,9 @@
-// dashboardApi.js
-// Thin fetch wrapper for the dashboard endpoints.
-// Sends the JWT issued at login as a Bearer token (matches flask_jwt_extended
-// on the backend, which reads Authorization: Bearer <token> by default).
-
-const BASE_URL = "/api";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL 
+  ? `${import.meta.env.VITE_API_BASE_URL}/api` 
+  : "/api";
 
 async function request(path) {
-  const token = localStorage.getItem("token"); // <-- adjust key to match your login code
+  const token = localStorage.getItem("token");
 
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: {
