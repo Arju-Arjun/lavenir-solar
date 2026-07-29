@@ -13,7 +13,7 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     phone_number = db.Column(db.String(20), nullable=True)
     password = db.Column(db.String(255), nullable=False)
-    
+    profile_photo = db.Column(db.String(255), nullable=True, default="https://res.cloudinary.com/demo/image/upload/v1312461204/sample.jpg")
     admin_id = db.Column(db.String(50), unique=True, nullable=True)
     employee_id = db.Column(db.String(50), unique=True, nullable=True)
     department = db.Column(db.String(50), nullable=True)
@@ -32,6 +32,7 @@ class User(db.Model):
             "employee_id": self.employee_id,
             "department": self.department,
             "status": self.status,
+            "profile_photo": self.profile_photo,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
 

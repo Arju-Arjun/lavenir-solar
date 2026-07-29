@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Service, User, PermissionRequest, CustomerProject, CustomerAuditLog
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import cloudinary
 import cloudinary.uploader
@@ -17,10 +17,7 @@ from utils import (
 
 service_bp = Blueprint('service_bp', __name__)
 
-# Standard core matrix validation key mapped strictly to target specification modules
 MODULE_NAME = 'Service'
-# Folder segment used in the storage path (kept separate from MODULE_NAME
-# above, which is used for the permissions matrix and audit logs).
 FOLDER_MODULE_NAME = 'service'
 
 
@@ -42,10 +39,6 @@ def resequence_service_numbers(customer_project_id):
 
 
 def handle_errors(f):
-    """Ensures any unhandled exception returns a proper JSON 500 response
-    that still passes through flask-cors, instead of an unhandled exception
-    hitting the Werkzeug debugger directly (which skips CORS headers and
-    shows up in the browser as a CORS error / net::ERR_FAILED)."""
     @wraps(f)
     def wrapper(*args, **kwargs):
         try:
@@ -57,26 +50,19 @@ def handle_errors(f):
     return wrapper
 
 
-# ==========================================
-# ACCESS LAYER
-# ==========================================
 @service_bp.route('/check-access/', methods=['GET'])
 @jwt_required()
 def check_module_access():
     uid = int(get_jwt_identity())
-    
-    # Process base permission checks via centralized validation helpers
     response, status_code = handle_blueprint_check_access(uid, MODULE_NAME)
     access_data = response.get_json()
     
-    # Query database for open pending authorization tokens matching this user session
     pending_records = PermissionRequest.query.filter_by(
         user_id=uid,
         module_name=MODULE_NAME,
         status='Pending'
     ).all()
     
-    # Format database rows into tracking dictionaries to retain status text displays on reload
     pending_requests_map = {}
     for req in pending_records:
         pending_requests_map[req.permission_type] = "Access request pending approval."
@@ -93,9 +79,6 @@ def request_module_access():
     return handle_blueprint_request_access(uid, MODULE_NAME, data)
 
 
-# ==========================================
-# READ SERVICES
-# ==========================================
 @service_bp.route('/project/<string:customer_id>/', methods=['GET'])
 @jwt_required()
 def get_services(customer_id):
@@ -148,127 +131,112 @@ def get_service_by_id(service_id):
     return jsonify({"service": service.to_dict()}), 200
 
 
-# ==========================================
-# CREATE / UPDATE SERVICE
-# ==========================================
 @service_bp.route('/<string:customer_id>/', methods=['POST'])
 @jwt_required()
 @handle_errors
 def create_service(customer_id):
-        current_user_id = int(get_jwt_identity())
-        user = User.query.get(current_user_id)
-        is_admin = user and user.role and user.role.strip().lower() == 'admin'
+    current_user_id = int(get_jwt_identity())
+    user = User.query.get(current_user_id)
+    is_admin = user and user.role and user.role.strip().lower() == 'admin'
 
-        if not is_admin and not check_permission(current_user_id, 'update', MODULE_NAME):
-            return jsonify({"error": "Permission Denied to create records."}), 403
+    if not is_admin and not check_permission(current_user_id, 'update', MODULE_NAME):
+        return jsonify({"error": "Permission Denied to create records."}), 403
 
-        customer = CustomerProject.query.filter_by(customer_id=customer_id).first()
-        if not customer:
-            return jsonify({"message": "Customer record could not be resolved."}), 404
+    customer = CustomerProject.query.filter_by(customer_id=customer_id).first()
+    if not customer:
+        return jsonify({"message": "Customer record could not be resolved."}), 404
 
-        # Centralized storage folder for this customer + module, e.g.:
-        # lavenir/JohnDoe_1023/service
-        folder_path = get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
+    folder_path = get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
 
-        service_date_raw = request.form.get('service_date')
-        service_type = request.form.get('service_type')
+    service_date_raw = request.form.get('service_date')
+    service_type = request.form.get('service_type')
 
-        if not service_date_raw or not service_type:
-            return jsonify({"error": "Service date and service type are mandatory fields."}), 400
+    if not service_date_raw or not service_type:
+        return jsonify({"error": "Service date and service type are mandatory fields."}), 400
 
+    try:
+        service_date = datetime.fromisoformat(service_date_raw)
+    except ValueError:
         try:
-            service_date = datetime.fromisoformat(service_date_raw)
+            service_date = datetime.strptime(service_date_raw, "%Y-%m-%d")
         except ValueError:
-            try:
-                service_date = datetime.strptime(service_date_raw, "%Y-%m-%d")
-            except ValueError:
-                return jsonify({"error": "Invalid date format for service_date."}), 400
+            return jsonify({"error": "Invalid date format for service_date."}), 400
 
-        next_service_due = None
-        next_due_raw = request.form.get('next_service_due')
-        if next_due_raw:
-            try:
-                next_service_due = datetime.fromisoformat(next_due_raw)
-            except ValueError:
+    # AUTOMATIC NEXT SERVICE DUE CALCULATION (e.g., +6 months from service_date)
+    # നിങ്ങൾക്ക് മാസം മാറ്റണമെങ്കിൽ 180 ദിവസത്തിന് പകരം ദിവസങ്ങൾ മാറ്റാം
+    next_service_due = service_date + timedelta(days=180)
+
+    technician_name = request.form.get('technician_name')
+    complaint_issue = request.form.get('complaint_issue')
+    system_status = request.form.get('system_status')
+    comments = request.form.get('comments')
+
+    parts_replaced_raw = request.form.get('parts_replaced', '[]')
+    try:
+        json.loads(parts_replaced_raw)
+        parts_replaced = parts_replaced_raw
+    except ValueError:
+        parts_replaced = '[]'
+
+    photo_urls_list = []
+    if 'images' in request.files:
+        uploaded_photos = request.files.getlist('images')
+        for i, photo in enumerate(uploaded_photos):
+            if photo and photo.filename != '':
                 try:
-                    next_service_due = datetime.strptime(next_due_raw, "%Y-%m-%d")
-                except ValueError:
-                    pass
+                    public_id = f"photo{i + 1}_{sanitize_path_segment(customer.customer_id)}"
+                    upload_res = cloudinary.uploader.upload(
+                        photo, folder=folder_path, public_id=public_id, overwrite=True
+                    )
+                    photo_urls_list.append(upload_res['secure_url'])
+                except Exception as ce:
+                    print(f"Cloudinary upload failed: {str(ce)}")
 
-        technician_name = request.form.get('technician_name')
-        complaint_issue = request.form.get('complaint_issue')
-        system_status = request.form.get('system_status')
-        comments = request.form.get('comments')
+    new_service = Service(
+        customer_project_id=customer.id,
+        service_number=0,
+        service_date=service_date,
+        service_type=service_type,
+        technician_name=technician_name,
+        complaint_issue=complaint_issue,
+        system_status=system_status,
+        parts_replaced=parts_replaced,
+        next_service_due=next_service_due,  # Automatically calculated
+        comments=comments,
+        images=json.dumps(photo_urls_list),
+        created_by=current_user_id,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    db.session.add(new_service)
+    resequence_service_numbers(customer.id)
 
-        parts_replaced_raw = request.form.get('parts_replaced', '[]')
-        try:
-            json.loads(parts_replaced_raw)
-            parts_replaced = parts_replaced_raw
-        except ValueError:
-            parts_replaced = '[]'
+    audit_log = CustomerAuditLog(
+        customer_project_id=customer.id,
+        user_id=current_user_id,
+        action="CREATE",
+        module_name=MODULE_NAME,
+        changes_payload=json.dumps({"initialized": True})
+    )
+    db.session.add(audit_log)
+    db.session.commit()
 
-        photo_urls_list = []
-        if 'images' in request.files:
-            uploaded_photos = request.files.getlist('images')
-            for i, photo in enumerate(uploaded_photos):
-                if photo and photo.filename != '':
-                    try:
-                        public_id = f"photo{i + 1}_{sanitize_path_segment(customer.customer_id)}"
-                        upload_res = cloudinary.uploader.upload(
-                            photo, folder=folder_path, public_id=public_id, overwrite=True
-                        )
-                        photo_urls_list.append(upload_res['secure_url'])
-                    except Exception as ce:
-                        print(f"Cloudinary upload failed: {str(ce)}")
+    from routes.notification_rules import notify_admins, get_actual_maintenance_data
 
-        new_service = Service(
-            customer_project_id=customer.id,
-            service_number=0,
-            service_date=service_date,
-            service_type=service_type,
-            technician_name=technician_name,
-            complaint_issue=complaint_issue,
-            system_status=system_status,
-            parts_replaced=parts_replaced,
-            next_service_due=next_service_due,
-            comments=comments,
-            images=json.dumps(photo_urls_list),
-            created_by=current_user_id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        db.session.add(new_service)
-        resequence_service_numbers(customer.id)
+    print(f"DEBUG: service_type received = {repr(service_type)}")  # TEMP: remove after debugging
 
-        audit_log = CustomerAuditLog(
-            customer_project_id=customer.id,
-            user_id=current_user_id,
-            action="CREATE",
-            module_name=MODULE_NAME,
-            changes_payload=json.dumps({"initialized": True})
-        )
-        db.session.add(audit_log)
-        db.session.commit()
+    if service_type and service_type.strip().lower().startswith('maint'):
+        actual_count, actual_last_date = get_actual_maintenance_data(customer)
+        print(f"DEBUG: recalculated maintenance_count={actual_count}, last_maintenance_added_date={actual_last_date}")  # TEMP
 
-        # ---- Notification hooks ----
-        # Imported here (not at module top) to avoid a circular import, since
-        # notification_rules.py itself may import helpers that touch other
-        # route modules.
-        from routes.notification_rules import notify_admins
+    notify_admins(
+        customer,
+        title="Service Completed",
+        body=f"Service #{new_service.service_number} was added for {customer.customer_name}.",
+        notif_type="service_complete"
+    )
 
-        if service_type and service_type.strip().lower() in ('maintenance', 'maintain'):
-            customer.maintenance_count = (customer.maintenance_count or 0) + 1
-            customer.last_maintenance_added_date = datetime.utcnow()
-            db.session.commit()
-
-        notify_admins(
-            customer,
-            title="Service Completed",
-            body=f"A service log was added for {customer.customer_name}.",
-            notif_type="service_complete"
-        )
-
-        return jsonify({"message": "Service log generated successfully", "service": new_service.to_dict()}), 201
+    return jsonify({"message": "Service log generated successfully", "service": new_service.to_dict()}), 201
 
 
 @service_bp.route('/update/<int:service_id>/', methods=['POST'])
@@ -290,8 +258,6 @@ def update_service(service_id):
     if not customer:
         return jsonify({"message": "Customer record could not be resolved."}), 404
 
-    # Centralized storage folder for this customer + module, e.g.:
-    # lavenir/JohnDoe_1023/service
     folder_path = get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
 
     changes = {}
@@ -305,29 +271,36 @@ def update_service(service_id):
                 changes[field] = {"old": old_val, "new": new_val}
                 setattr(service, field, new_val)
 
-    date_fields = ['service_date', 'next_service_due']
-    for field in date_fields:
-        if field in request.form:
-            raw_date = request.form.get(field)
-            old_date_obj = getattr(service, field)
-            old_str = old_date_obj.strftime("%Y-%m-%d") if old_date_obj else None
-            
-            new_date_obj = None
-            new_str = None
-            if raw_date:
+    if 'service_date' in request.form:
+        raw_date = request.form.get('service_date')
+        old_date_obj = service.service_date
+        old_str = old_date_obj.strftime("%Y-%m-%d") if old_date_obj else None
+        
+        new_date_obj = None
+        new_str = None
+        if raw_date:
+            try:
+                new_date_obj = datetime.fromisoformat(raw_date)
+                new_str = new_date_obj.strftime("%Y-%m-%d")
+            except ValueError:
                 try:
-                    new_date_obj = datetime.fromisoformat(raw_date)
+                    new_date_obj = datetime.strptime(raw_date, "%Y-%m-%d")
                     new_str = new_date_obj.strftime("%Y-%m-%d")
                 except ValueError:
-                    try:
-                        new_date_obj = datetime.strptime(raw_date, "%Y-%m-%d")
-                        new_str = new_date_obj.strftime("%Y-%m-%d")
-                    except ValueError:
-                        continue
-            
-            if old_str != new_str:
-                changes[field] = {"old": old_str, "new": new_str}
-                setattr(service, field, new_date_obj)
+                    pass
+        
+        if old_str != new_str and new_date_obj:
+                    changes['service_date'] = {"old": old_str, "new": new_str}
+                    service.service_date = new_date_obj
+                    
+                    # Recalculate next due automatically (+1 day for testing)
+                    new_next_due = new_date_obj + timedelta(days=1)
+                    old_next_due = service.next_service_due
+                    old_next_str = old_next_due.strftime("%Y-%m-%d") if old_next_due else None
+                    new_next_str = new_next_due.strftime("%Y-%m-%d")
+                    
+                    changes['next_service_due'] = {"old": old_next_str, "new": new_next_str}
+                    service.next_service_due = new_next_due
 
     if 'parts_replaced' in request.form:
         new_parts_raw = request.form.get('parts_replaced', '[]')
@@ -348,8 +321,6 @@ def update_service(service_id):
     if 'images' in request.files:
         uploaded_photos = request.files.getlist('images')
         new_urls = []
-        # Continue numbering from where the existing photo list left off so
-        # each image gets a unique public_id within the same module folder.
         start_index = len(photo_urls_list) + 1
         for i, photo in enumerate(uploaded_photos):
             if photo and photo.filename != '':
@@ -401,9 +372,6 @@ def update_service(service_id):
     return jsonify({"message": "Service records updated successfully", "service": service.to_dict()}), 200
 
 
-# ==========================================
-# DELETE SERVICE
-# ==========================================
 @service_bp.route('/<int:service_id>/', methods=['DELETE'])
 @jwt_required()
 @handle_errors
@@ -420,9 +388,6 @@ def delete_service(service_id):
         return jsonify({"message": "No service metadata found matching target configuration key."}), 404
 
     customer = CustomerProject.query.get(service.customer_project_id)
-    # Centralized storage folder for this customer + module (used to resolve
-    # public_ids for deletion). Falls back gracefully if the customer record
-    # is somehow missing so cleanup failure never blocks the delete itself.
     folder_path = (
         get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
         if customer else None
@@ -448,7 +413,16 @@ def delete_service(service_id):
     )
     db.session.add(audit_log)
     
+    was_maintenance = bool(service.service_type) and service.service_type.strip().lower().startswith('maint')
+
     db.session.delete(service)
     resequence_service_numbers(service.customer_project_id)
+
+    if was_maintenance and customer:
+        from routes.notification_rules import get_actual_maintenance_data
+        actual_count, actual_last_date = get_actual_maintenance_data(customer)
+        print(f"DEBUG delete: recomputed maintenance_count={actual_count}, "
+              f"last_maintenance_added_date={actual_last_date}")  # TEMP
+
     db.session.commit()
     return jsonify({"message": "Service record expunged successfully from database."}), 200

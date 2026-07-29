@@ -228,8 +228,8 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
               <button className={`nav-node-item ${currentPath === '/' ? 'active' : ''}`} onClick={() => navigateTo('/')}>Dashboard</button>
               <button className={`nav-node-item ${currentPath === '/customers' ? 'active' : ''}`} onClick={() => navigateTo('/customers')}>View Customers</button>
               <button className={`nav-node-item ${currentPath === '/documents' ? 'active' : ''}`} onClick={() => navigateTo('/documents')}>Documents</button>
-              <button className={`nav-node-item ${currentPath === '/workflow' ? 'active' : ''}`} onClick={() => navigateTo('/workflow')}>Workflow Overview</button>
-              <button className={`nav-node-item ${currentPath === '/supplement' ? 'active' : ''}`} onClick={() => navigateTo('/supplement')}>Supplement Documents</button>
+              <button className={`nav-node-item ${currentPath === '/workflow-details' ? 'active' : ''}`} onClick={() => navigateTo('/workflow-details')}>Workflow Details</button>
+              <button className={`nav-node-item ${currentPath === '/supplements' ? 'active' : ''}`} onClick={() => navigateTo('/supplements')}>Supplement Documents</button>
               <button className={`nav-node-item ${currentPath === '/settings' ? 'active' : ''}`} onClick={() => navigateTo('/settings')}>Settings</button>
               <button className={`nav-node-item ${currentPath === '/profile' ? 'active' : ''}`} onClick={() => navigateTo('/profile')}>Profile</button>
             </>
@@ -238,7 +238,8 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
               <button className={`nav-node-item ${currentPath === '/' ? 'active' : ''}`} onClick={() => navigateTo('/')}>Dashboard</button>
               <button className={`nav-node-item ${currentPath === '/customers' ? 'active' : ''}`} onClick={() => navigateTo('/customers')}>View Customers</button>
               <button className={`nav-node-item ${currentPath === '/documents' ? 'active' : ''}`} onClick={() => navigateTo('/documents')}>Documents</button>
-              <button className={`nav-node-item ${currentPath === '/supplement' ? 'active' : ''}`} onClick={() => navigateTo('/supplement')}>Supplement Documents</button>
+              <button className={`nav-node-item ${currentPath === '/supplements' ? 'active' : ''}`} onClick={() => navigateTo('/supplements')}>Supplement Documents</button>
+              <button className={`nav-node-item ${currentPath === '/workflow-details' ? 'active' : ''}`} onClick={() => navigateTo('/workflow-details')}>Workflow Details</button>
               <button className={`nav-node-item ${currentPath === '/profile' ? 'active' : ''}`} onClick={() => navigateTo('/profile')}>Profile</button>
             </>
           )}

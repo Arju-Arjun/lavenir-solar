@@ -27,6 +27,8 @@ from routes.push import push_bp
 from routes.notifications import notifications_bp
 from routes.dashboard import admin_dashboard_bp, staff_dashboard_bp
 from routes.documents import documents_bp
+from routes.profile import profile_bp
+from routes.workflow import workflow_bp
 
 # Background job: twice-daily maintenance/renewal notification checks
 from routes.scheduler import start_scheduler
@@ -98,8 +100,8 @@ app.register_blueprint(notifications_bp, url_prefix='/api/notifications')
 app.register_blueprint(admin_dashboard_bp, url_prefix='/api/admin/dashboard')
 app.register_blueprint(staff_dashboard_bp, url_prefix='/api/staff/dashboard')
 app.register_blueprint(documents_bp, url_prefix='/api/documents')
-
-
+app.register_blueprint(profile_bp, url_prefix='/api/profile')
+app.register_blueprint(workflow_bp, url_prefix='/api/workflow')
 
 @app.route('/')
 def health_check():

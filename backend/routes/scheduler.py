@@ -23,9 +23,13 @@ def start_scheduler(app):
     scheduler = BackgroundScheduler()
 
     def job():
+        print("DEBUG: scheduler job ticked")  # TEMP: remove after debugging
         with app.app_context():
             run_daily_notification_checks()
 
-    scheduler.add_job(job, 'interval', minutes=2, id='notification_check', replace_existing=True)
+    # TEST VALUE: needs to run more often than NOTIFICATION_REPEAT_GAP_SECONDS (30s)
+    # in notification_rules.py, otherwise the repeat gap can't be hit accurately.
+    scheduler.add_job(job, 'interval', hours=8, id='notification_check', replace_existing=True)
     scheduler.start()
+    print("DEBUG: scheduler.start() called")  # TEMP: remove after debugging
     return scheduler

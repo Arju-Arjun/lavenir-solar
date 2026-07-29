@@ -7,6 +7,9 @@ import CustomerProfile from './customer/CustomerProfile';
 import Settings from './admin/Settings';
 import { useAuth } from './context/AuthContext';
 import DocumentsView from './customer/DocumentsView';
+import ProfileView from './staff/ProfileView';
+import WorkflowView from './customer/WorkflowView';
+import Supplements from './components/Supplements';
 
 function ProtectedRoute({ isAllowed, fallback, children }) {
   if (!isAllowed) {
@@ -68,6 +71,9 @@ function App() {
           {currentPath.startsWith('/customer-profile/') && <CustomerProfile />}
           {currentPath === '/settings' && <Settings />}
           {currentPath === '/documents' && <DocumentsView />}
+          {currentPath === '/profile' && <ProfileView />}
+          {currentPath === '/workflow-details' && <WorkflowView />}
+          {currentPath === '/supplements' && <Supplements />}
         </AdminDashboard>
       </ProtectedRoute>
 
@@ -89,6 +95,9 @@ function App() {
           {currentPath === '/customers' && <CustomersView />}
           {currentPath.startsWith('/customer-profile/') && <CustomerProfile />}
           {currentPath === '/documents' && <DocumentsView />}
+          {currentPath === '/profile' && <ProfileView />}
+          {currentPath === '/workflow-details' && <WorkflowView />}
+          {currentPath === '/supplements' && <Supplements />}
         </StaffDashboard>
       </ProtectedRoute>
     </>

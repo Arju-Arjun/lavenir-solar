@@ -7,9 +7,9 @@ from models import db, PushSubscription, Notification
 
 push_bp = Blueprint('push', __name__)
 
-VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY')
-VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY')
-VAPID_CLAIMS = {"sub": os.getenv('VAPID_CLAIM_EMAIL')}
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', 'BDKPUxbcUpXjyoZ7kaXFvfK8ZNuaipR1SnBE15Yr0320VQ0RuAhbhwcsWsgIL4yOZHCmxRn1p6E0p-r7zr8_fL4')
+VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY', 'DL_0FYo8nSAVQ5PV7RxVQ4Ds-Qdr2hPCSWsI7IMlFJg')
+VAPID_CLAIMS = {"sub": os.getenv('VAPID_CLAIM_EMAIL', 'mailto:arjun.ai.tinos@gmail.com')}
 
 
 @push_bp.route('/vapid-public-key', methods=['GET'])

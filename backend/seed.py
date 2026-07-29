@@ -370,6 +370,7 @@
 
 
 from decimal import Decimal
+from sqlalchemy import text
 from werkzeug.security import generate_password_hash
 
 from app import app
@@ -393,158 +394,172 @@ from models import (
     PushSubscription
 )
 
-PASSWORD = "admin123"
+# PASSWORD = "admin123"
 
-def create_default_permissions():
-    return {
-        "dashboard": {
-            "view": True,
-            "create": False,
-            "update": False,
-            "delete": False,
-        },
-        "customers": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": True,
-        },
-        "site_visit": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": True,
-        },
-        "mnre": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": True,
-        },
-        "payments": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": True,
-        },
-        "kseb": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": False,
-        },
-        "bank_loan": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": False,
-        },
-        "staff": {
-            "view": True,
-            "create": True,
-            "update": True,
-            "delete": False,
-        },
-        "reports": {
-            "view": True,
-            "create": False,
-            "update": False,
-            "delete": False,
-        },
-    }
+# def create_default_permissions():
+#     return {
+#         "dashboard": {
+#             "view": True,
+#             "create": False,
+#             "update": False,
+#             "delete": False,
+#         },
+#         "customers": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": True,
+#         },
+#         "site_visit": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": True,
+#         },
+#         "mnre": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": True,
+#         },
+#         "payments": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": True,
+#         },
+#         "kseb": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": False,
+#         },
+#         "bank_loan": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": False,
+#         },
+#         "staff": {
+#             "view": True,
+#             "create": True,
+#             "update": True,
+#             "delete": False,
+#         },
+#         "reports": {
+#             "view": True,
+#             "create": False,
+#             "update": False,
+#             "delete": False,
+#         },
+#     }
 
-with app.app_context():
-    print("=" * 60)
-    print("Dropping all existing tables...")
-    print("=" * 60)
-    db.drop_all()
+# with app.app_context():
+#     print("=" * 60)
+#     print("Dropping all existing tables...")
+#     print("=" * 60)
+#     db.drop_all()
 
-    print("=" * 60)
-    print("Creating fresh tables...")
-    print("=" * 60)
-    db.create_all()
+#     print("=" * 60)
+#     print("Creating fresh tables...")
+#     print("=" * 60)
+#     db.create_all()
 
-    print("Creating Administrator account...")
-    admin = User(
-        full_name="Administrator",
-        role="admin",
-        email="admin@example.com",
-        phone_number="9999999999",
-        password=generate_password_hash(PASSWORD),
-        admin_id="ADM001",
-        department="Administration",
-        status="Active",
-    )
-    db.session.add(admin)
-    db.session.commit()
+#     print("Creating Administrator account...")
+#     admin = User(
+#         full_name="Administrator",
+#         role="admin",
+#         email="admin@example.com",
+#         phone_number="9999999999",
+#         password=generate_password_hash(PASSWORD),
+#         admin_id="ADM001",
+#         department="Administration",
+#         status="Active",
+#     )
+#     db.session.add(admin)
+#     db.session.commit()
 
-    db.session.add(
-        UserPermission(
-            user_id=admin.id,
-            permissions_matrix=str(create_default_permissions()),
-            updated_by=admin.id,
-        )
-    )
+#     db.session.add(
+#         UserPermission(
+#             user_id=admin.id,
+#             permissions_matrix=str(create_default_permissions()),
+#             updated_by=admin.id,
+#         )
+#     )
 
-    print("Creating Staff accounts...")
-    staff_users = []
-    for i in range(1, 4):
-        staff = User(
-            full_name=f"Staff {i}",
-            role="staff",
-            email=f"staff{i}@example.com",
-            phone_number=f"900000000{i}",
-            password=generate_password_hash(PASSWORD),
-            employee_id=f"EMP00{i}",
-            department="Operations",
-            status="Active",
-        )
-        db.session.add(staff)
-        staff_users.append(staff)
+#     print("Creating Staff accounts...")
+#     staff_users = []
+#     for i in range(1, 4):
+#         staff = User(
+#             full_name=f"Staff {i}",
+#             role="staff",
+#             email=f"staff{i}@example.com",
+#             phone_number=f"900000000{i}",
+#             password=generate_password_hash(PASSWORD),
+#             employee_id=f"EMP00{i}",
+#             department="Operations",
+#             status="Active",
+#         )
+#         db.session.add(staff)
+#         staff_users.append(staff)
 
-    db.session.commit()
+#     db.session.commit()
 
-    for staff in staff_users:
-        db.session.add(
-            UserPermission(
-                user_id=staff.id,
-                permissions_matrix=str(create_default_permissions()),
-                updated_by=admin.id,
-            )
-        )
+#     for staff in staff_users:
+#         db.session.add(
+#             UserPermission(
+#                 user_id=staff.id,
+#                 permissions_matrix=str(create_default_permissions()),
+#                 updated_by=admin.id,
+#             )
+#         )
 
-    print("Creating initial customer profiles...")
-    customers = [
-        CustomerProject(
-            customer_id="CUS001",
-            customer_name="Rahul Kumar",
-            email="rahul@gmail.com",
-            phone_number="9876543210",
-            district="Kollam",
-            place="Chavara",
-            capacity_kw=Decimal("3.00"),
-            project_status="Active",
-        ),
-        CustomerProject(
-            customer_id="CUS002",
-            customer_name="Arun Nair",
-            email="arun@gmail.com",
-            phone_number="9876543211",
-            district="Ernakulam",
-            place="Kochi",
-            capacity_kw=Decimal("5.00"),
-            project_status="Active",
-        ),
-    ]
+#     print("Creating initial customer profiles...")
+#     customers = [
+#         CustomerProject(
+#             customer_id="CUS001",
+#             customer_name="Rahul Kumar",
+#             email="rahul@gmail.com",
+#             phone_number="9876543210",
+#             district="Kollam",
+#             place="Chavara",
+#             capacity_kw=Decimal("3.00"),
+#             project_status="Active",
+#         ),
+#         CustomerProject(
+#             customer_id="CUS002",
+#             customer_name="Arun Nair",
+#             email="arun@gmail.com",
+#             phone_number="9876543211",
+#             district="Ernakulam",
+#             place="Kochi",
+#             capacity_kw=Decimal("5.00"),
+#             project_status="Active",
+#         ),
+#     ]
 
-    db.session.add_all(customers)
-    db.session.commit()
+#     db.session.add_all(customers)
+#     db.session.commit()
 
-    print("=" * 60)
-    print("Database seeding completed successfully! 🎉")
-    print("=" * 60)
-    print("\nLogin Credentials:")
-    print("Admin : admin@example.com / admin123")
-    print("Staff 1: staff1@example.com / admin123")
-    print("Staff 2: staff2@example.com / admin123")
-    print("Staff 3: staff3@example.com / admin123")
+#     print("=" * 60)
+#     print("Database seeding completed successfully! 🎉")
+#     print("=" * 60)
+#     print("\nLogin Credentials:")
+#     print("Admin : admin@example.com / admin123")
+#     print("Staff 1: staff1@example.com / admin123")
+#     print("Staff 2: staff2@example.com / admin123")
+#     print("Staff 3: staff3@example.com / admin123")
+
+def add_column_profile_photo_to_users():
+    with app.app_context():
+        # IF NOT EXISTS makes this safe to run more than once.
+        db.session.execute(text(
+            "ALTER TABLE users "
+            "ADD COLUMN IF NOT EXISTS profile_photo VARCHAR(255) "
+            "DEFAULT 'https://res.cloudinary.com/demo/image/upload/v1312461204/sample.jpg';"
+        ))
+        db.session.commit()  # <-- this was missing, so the ALTER never persisted
+        print("profile_photo column ensured on users table.")
+
+if __name__ == "__main__":
+    add_column_profile_photo_to_users()

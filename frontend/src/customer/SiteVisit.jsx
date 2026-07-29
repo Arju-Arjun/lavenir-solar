@@ -1,731 +1,705 @@
-import React, { useState, useEffect } from "react";
-import { FaLock, FaPaperPlane, FaEdit, FaTrashAlt, FaEye, FaTimes } from "react-icons/fa";
-import ConfirmationModal from "../components/ConfirmationModal";
-import { useAuth } from "../context/AuthContext"; // <-- Hooks into the global state context layer
+  import React, { useState, useEffect, useMemo, useRef } from "react";
+  // add map location icon
+  import { FaLock, FaCloudUploadAlt, FaEye, FaMapMarkerAlt, FaFilePdf, FaTrashAlt, FaEdit, FaPaperPlane, } from "react-icons/fa";
+  import { FaLocationCrosshairs } from "react-icons/fa6";
+  import ConfirmationModal from "../components/ConfirmationModal"; 
+  import { useAuth } from "../context/AuthContext";
 
-const formatDate = (value) => {
-  if (!value) return "N/A";
-  try {
-    return new Date(value).toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric"
-    });
-  } catch {
-    return value;
-  }
-};
+  const getGoogleMapsUrl = (location) => {
+    if (!location) return "#";
+    const targetLocation = location.includes(" | ") ? location.split(" | ")[0] : location;
+    return `http://googleusercontent.com/maps.google.com/?q=${encodeURIComponent(targetLocation)}`;
+  };
 
-const buildPartsArray = (value) => {
-  if (!value) return [];
-  if (Array.isArray(value)) return value;
-  if (typeof value === "string") {
-    if (value.trim().startsWith("[") && value.trim().endsWith("]")) {
-      try {
-        return JSON.parse(value);
-      } catch {
-        // Fall through
-      }
+  const getPdfPreviewUrl = (path) => {
+    if (!path) return "#";
+    if (path.toLowerCase().endsWith('.pdf') || path.includes('/raw/upload/')) {
+      return `https://docs.google.com/gview?url=${encodeURIComponent(path)}&embedded=true`;
     }
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-};
-
-const Services = ({ customerId, customer }) => {
-  // Pull core state matrix variables directly from the Global Context Memory Map
-  const { permissions, refetchPermissions, isAdmin, role } = useAuth();
-  const isUserAdmin = isAdmin || role === "admin";
-  
-  // Resolve module permissions directly from the central registry matrix schema
-  const access = permissions["Service"] || { view: false, create: false, update: false, delete: false };
-
-  // Component operational tracking states
-  const [loading, setLoading] = useState(true);
-  const [pendingRequests, setPendingRequests] = useState({});
-  const [serviceList, setServiceList] = useState([]);
-  const [sortBy, setSortBy] = useState("created_asc");
-  const [serviceEdit, setServiceEdit] = useState(false);
-  const [editingService, setEditingService] = useState(null);
-  const [selectedPhotos, setSelectedPhotos] = useState([]);
-  const [photoPreviews, setPhotoPreviews] = useState([]);
-  const [existingPhotos, setExistingPhotos] = useState([]);
-  const [removedPhotos, setRemovedPhotos] = useState([]);
-  const [expandedService, setExpandedService] = useState(null);
-  
-  const [modalConfig, setModalConfig] = useState({
-    isOpen: false,
-    title: "",
-    message: "",
-    onConfirm: () => {}
-  });
-
-  const [formData, setFormData] = useState({
-    service_date: "",
-    service_type: "Maintenance",
-    technician_name: "",
-    complaint_issue: "",
-    system_status: "Operational",
-    parts_replaced: "",
-    next_service_due: "",
-    comments: ""
-  });
-
-  // Automatically pull datasets when page sorting options or customer target indexes change
-  useEffect(() => {
-    if (access.view) {
-      fetchServiceDataset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerId, access.view, sortBy]);
-
-  const fetchServiceDataset = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/service/project/${customerId}/?sort_by=${sortBy}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
-      });
-
-      if (response.status === 401) {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user_role");
-        window.location.reload();
-        return;
-      }
-
-      if (response.ok) {
-        const data = await response.json();
-        setServiceList(data.services || []);
-      } else {
-        setServiceList([]);
-      }
-    } catch (err) {
-      console.error("Failed to load service records", err);
-      setServiceList([]);
-    } finally {
-      setLoading(false);
-    }
+    return path;
   };
 
-  const resetFormState = () => {
-    photoPreviews.forEach((url) => {
-      try {
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error("Error revoking object URL", e);
-      }
-    });
+  // Hoisted so this array literal isn't rebuilt (and re-mapped) on every render
+  const VERIFICATION_DOC_KEYS = ["aadhaar", "pan", "kseb_bill", "bank_passbook", "land_tax", "building_tax", "signature"];
 
-    setFormData({
-      service_date: "",
-      service_type: "Maintenance",
-      technician_name: "",
-      complaint_issue: "",
-      system_status: "Operational",
-      parts_replaced: "",
-      next_service_due: "",
-      comments: ""
-    });
-    setEditingService(null);
-    setSelectedPhotos([]);
-    setPhotoPreviews([]);
-    setExistingPhotos([]);
-    setRemovedPhotos([]);
-  };
-
-  const handleRequestAccessSubmit = async (permissionType) => {
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/service/request-access/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`
-        },
-        body: JSON.stringify({ permission_type: permissionType })
-      });
-
-      if (response.ok) {
-        const res = await response.json();
-        setPendingRequests((prev) => ({
-          ...prev,
-          [permissionType]: res.message || "Access request pending approval."
-        }));
-
-        // Quietly poll and sync global metrics matrix state if role criteria upgrades automatically
-        if (refetchPermissions) {
-          await refetchPermissions();
-        }
-      }
-    } catch (err) {
-      console.error("Access request error", err);
-    }
-  };
-
-  const handleInputChange = (e) => {
-    if (!access.update) return;
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handlePhotoArrayChange = (e) => {
-    if (!access.update) return;
-    const files = Array.from(e.target.files);
-    setSelectedPhotos((prev) => [...prev, ...files]);
-    const newPreviews = files.map((file) => URL.createObjectURL(file));
-    setPhotoPreviews((prev) => [...prev, ...newPreviews]);
-  };
-
-  const handleRemoveNewPhoto = (index) => {
-    if (!access.update) return;
-    if (photoPreviews[index]) {
-      URL.revokeObjectURL(photoPreviews[index]);
-    }
-    setSelectedPhotos((prev) => prev.filter((_, i) => i !== index));
-    setPhotoPreviews((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleRemoveExistingPhoto = (index, url) => {
-    if (!access.update) return;
-    setExistingPhotos((prev) => prev.filter((_, i) => i !== index));
-    setRemovedPhotos((prev) => [...prev, url]);
-  };
-
-  const openCreateForm = () => {
-    resetFormState();
-    setServiceEdit(true);
-  };
-
-  const openEditForm = (service) => {
-    setEditingService(service);
+  const SiteVisit = ({ customerId, customer }) => {
+    const { permissions, refetchPermissions, isAdmin, role } = useAuth();
     
-    let rawParts = "";
-    if (service.parts_replaced) {
-      if (Array.isArray(service.parts_replaced)) {
-        rawParts = service.parts_replaced.join(", ");
-      } else if (typeof service.parts_replaced === "string") {
-        if (service.parts_replaced.trim().startsWith("[") && service.parts_replaced.trim().endsWith("]")) {
-          try {
-            const parsed = JSON.parse(service.parts_replaced);
-            rawParts = Array.isArray(parsed) ? parsed.join(", ") : service.parts_replaced;
-          } catch {
-            rawParts = service.parts_replaced;
+    const modulePermissions = useMemo(
+      () => permissions["Site Visit"] || permissions["SiteVisit"] || { view: false, create: false, update: false, delete: false },
+      [permissions]
+    );
+    const canView = isAdmin || role === 'admin' || modulePermissions.view;
+    const canUpdate = isAdmin || role === 'admin' || modulePermissions.update;
+
+    const [loading, setLoading] = useState(true);
+    const [locationLoading, setLocationLoading] = useState(false);
+    const [siteEdit, setSiteEdit] = useState(false);
+    const [visitData, setVisitData] = useState(null);
+    const [pendingRequests, setPendingRequests] = useState({});
+    const [accessDenied, setAccessDenied] = useState(false);
+    const [requestLoading, setRequestLoading] = useState(false);
+
+    const [modalConfig, setModalConfig] = useState({
+      isOpen: false,
+      title: "",
+      message: "",
+      onConfirm: () => {}
+    });
+
+    const [selectedPhotos, setSelectedPhotos] = useState([]);
+    const [photoPreviews, setPhotoPreviews] = useState([]);
+    const [existingPhotos, setExistingPhotos] = useState([]);
+    const [removedPhotos, setRemovedPhotos] = useState([]);
+    const [documentFiles, setDocumentFiles] = useState({});
+
+    const [formData, setFormData] = useState({
+      panel_capacity: "",
+      system_capacity: "",
+      feasibility: "Yes",
+      project_cost: "",
+      location: "",
+      comments: "",
+      ownership_change: "No",
+      load_enhancement: "No",
+      wifi: "No",
+      changes: ""
+    });
+
+    useEffect(() => {
+      if (customerId) {
+        fetchAccessRequests();
+      }
+    }, [customerId]);
+
+    // Blob URLs created by URL.createObjectURL() are never garbage collected on their
+    // own — revoke them on unmount so we don't leak memory across visits to this page.
+    const photoPreviewsRef = useRef(photoPreviews);
+    photoPreviewsRef.current = photoPreviews;
+    useEffect(() => {
+      return () => {
+        photoPreviewsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      };
+    }, []);
+
+    const fetchAccessRequests = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/site-visit/check-access/`, {
+          headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.pending_requests) {
+            setPendingRequests(data.pending_requests);
+          }
+          if (data.view || canView) {
+            setAccessDenied(false);
+            fetchSiteVisitDataset();
+          } else {
+            setAccessDenied(true);
+          }
+        } else if (res.status === 403) {
+          setAccessDenied(true);
+        }
+      } catch (err) {
+        console.error('Failed to check access privileges:', err);
+        if (!canView) setAccessDenied(true);
+      }
+    };
+
+    const fetchSiteVisitDataset = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/site-visit/${customerId}/`, {
+          headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
+        });
+
+        if (response.status === 401) {
+          localStorage.clear();
+          window.location.reload();
+          return;
+        }
+
+        if (response.status === 403) {
+          setAccessDenied(true);
+          return;
+        }
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.visit) {
+            setVisitData(data.visit);
+            setFormData({
+              panel_capacity: data.visit.panel_capacity !== undefined ? String(data.visit.panel_capacity) : "",
+              system_capacity: data.visit.system_capacity !== undefined ? String(data.visit.system_capacity) : "",
+              feasibility: data.visit.feasibility || "Yes",
+              project_cost: data.visit.project_cost !== undefined ? String(data.visit.project_cost) : "",
+              location: data.visit.location || "",
+              comments: data.visit.comments || "",
+              ownership_change: data.visit.ownership_change || "No",
+              load_enhancement: data.visit.load_enhancement || "No",
+              wifi: data.visit.wifi || "No",
+              changes: data.visit.changes || ""
+            });
+            setExistingPhotos(data.visit.images || []);
+          } else {
+            resetFormDataState();
           }
         } else {
-          rawParts = service.parts_replaced;
+          resetFormDataState();
         }
+      } catch (err) {
+        console.error("Failed to recover site data block", err);
+        resetFormDataState();
+      } finally {
+        setLoading(false);
       }
-    }
+    };
 
-    let parsedImages = [];
-    if (service.images) {
-      if (Array.isArray(service.images)) {
-        parsedImages = service.images;
-      } else if (typeof service.images === "string") {
-        try {
-          parsedImages = JSON.parse(service.images);
-        } catch {
-          parsedImages = [];
+    const resetFormDataState = () => {
+      setVisitData(null);
+      setFormData({
+        panel_capacity: "",
+        system_capacity: "",
+        feasibility: "Yes",
+        project_cost: "",
+        location: "",
+        comments: "",
+        ownership_change: "No",
+        load_enhancement: "No",
+        wifi: "No",
+        changes: ""
+      });
+      setExistingPhotos([]);
+    };
+
+    const handleRequestAccessSubmit = async (permissionType) => {
+      setRequestLoading(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/site-visit/request-access/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${localStorage.getItem("token")}`
+          },
+          body: JSON.stringify({ permission_type: permissionType })
+        });
+        if (response.ok) {
+          const res = await response.json();
+          setPendingRequests((prev) => ({
+            ...prev,
+            [permissionType]: "Pending"
+          }));
+          alert(res.message || "Access request submitted successfully.");
+          if (refetchPermissions) {
+            await refetchPermissions();
+          }
         }
+      } catch (err) {
+        console.error("Transmission error on permission pipeline", err);
+      } finally {
+        setRequestLoading(false);
       }
-    }
+    };
 
-    setFormData({
-      service_date: service.service_date ? service.service_date.split("T")[0] : "",
-      service_type: service.service_type || "Maintenance",
-      technician_name: service.technician_name || "",
-      complaint_issue: service.complaint_issue || "",
-      system_status: service.system_status || "Operational",
-      parts_replaced: rawParts,
-      next_service_due: service.next_service_due ? service.next_service_due.split("T")[0] : "",
-      comments: service.comments || ""
-    });
-    
-    setExistingPhotos(parsedImages);
-    setSelectedPhotos([]);
-    setPhotoPreviews([]);
-    setRemovedPhotos([]);
-    setServiceEdit(true);
-  };
+    const handleInputChange = (e) => {
+      if (!canUpdate) return;
+      const { name, value } = e.target;
+      setFormData((prev) => ({ ...prev, [name]: value }));
+    };
 
-  const triggerSaveConfirmation = (e) => {
-    e.preventDefault();
-    if (!access.update) {
-      alert("Operational Guardrail: Security matrix context lacks required write permissions.");
-      return;
-    }
-    setModalConfig({
-      isOpen: true,
-      title: editingService ? "Update Service Record" : "Save Service Record",
-      message: editingService
-        ? "Are you sure you want to update this service record?"
-        : "Are you sure you want to save this service record?",
-      onConfirm: () => {
-        executeFormSubmission();
+    const handleCheckboxChange = (name, checked) => {
+      if (!canUpdate) return;
+      setFormData((prev) => ({ ...prev, [name]: checked ? "Yes" : "No" }));
+    };
+
+    const handleLocationAutoFill = async () => {
+      if (!canUpdate || !navigator.geolocation || locationLoading) return;
+      setLocationLoading(true);
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const { latitude, longitude } = position.coords;
+            const gpsCoordinates = `${latitude},${longitude}`;
+            const response = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`
+            );
+            const data = await response.json();
+            const addressDetails = data?.address || {};
+            const locationName = [
+              addressDetails?.road,
+              addressDetails?.suburb,
+              addressDetails?.city || addressDetails?.town || addressDetails?.village
+            ].filter(Boolean).join(", ") || "Detected Location";
+
+            setFormData((prev) => ({
+              ...prev,
+              location: `${gpsCoordinates} | ${locationName}`,
+            }));
+          } catch (error) {
+            console.error("Location fetch failed:", error);
+          } finally {
+            setLocationLoading(false);
+          }
+        },
+        (error) => {
+          console.error("Geolocation error:", error);
+          setLocationLoading(false);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    };
+
+    const handlePhotoArrayChange = (e) => {
+      if (!canUpdate) return;
+      const files = Array.from(e.target.files);
+      setSelectedPhotos((prev) => [...prev, ...files]);
+      const newPreviews = files.map((file) => URL.createObjectURL(file));
+      setPhotoPreviews((prev) => [...prev, ...newPreviews]);
+    };
+
+    const handleDocumentChange = (e) => {
+      if (!canUpdate) return;
+      const { name, files } = e.target;
+      if (files && files[0]) {
+        setDocumentFiles((prev) => ({ ...prev, [name]: files[0] }));
       }
-    });
-  };
+    };
 
-  const executeFormSubmission = async () => {
-    setModalConfig((prev) => ({ ...prev, isOpen: false }));
-    setLoading(true);
+    const handleRemoveNewPhoto = (index) => {
+      if (!canUpdate) return;
+      setSelectedPhotos((prev) => prev.filter((_, i) => i !== index));
+      setPhotoPreviews((prev) => {
+        const removedUrl = prev[index];
+        if (removedUrl) URL.revokeObjectURL(removedUrl);
+        return prev.filter((_, i) => i !== index);
+      });
+    };
 
-    const submitPayload = new FormData();
-    Object.entries(formData).forEach(([key, value]) => {
-      if (key === "parts_replaced") {
-        submitPayload.append("parts_replaced", JSON.stringify(buildPartsArray(value)));
-      } else {
-        // Always send the field, even when empty — otherwise the update
-        // endpoint's "if field in request.form" check never sees it and
-        // an intentionally-cleared value (e.g. next_service_due) never saves.
-        submitPayload.append(key, value);
+    const handleRemoveExistingPhoto = (index, url) => {
+      if (!canUpdate) return;
+      setExistingPhotos((prev) => prev.filter((_, i) => i !== index));
+      setRemovedPhotos((prev) => [...prev, url]);
+    };
+
+    const triggerSaveConfirmation = (e) => {
+      e.preventDefault();
+      if (!canUpdate) {
+        alert("Operational Guardrail: Security context lacks required update clearance parameters.");
+        return;
       }
-    });
+      setModalConfig({
+        isOpen: true,
+        title: "Save Changes",
+        message: "Are you sure you want to save this site visit data?",
+        onConfirm: () => {
+          executeFormSubmission();
+        }
+      });
+    };
 
-    selectedPhotos.forEach((file) => {
-      submitPayload.append("images", file);
-    });
+    const executeFormSubmission = async () => {
+      setModalConfig((prev) => ({ ...prev, isOpen: false }));
+      setLoading(true);
+      
+      const submitPayload = new FormData();
+      Object.keys(formData).forEach((key) => {
+        if (key !== "images") {
+          submitPayload.append(key, formData[key]);
+        }
+      });
 
-    if (removedPhotos.length) {
+      selectedPhotos.forEach((file) => {
+        submitPayload.append("images", file);
+      });
+
+      Object.keys(documentFiles).forEach((fieldKey) => {
+        submitPayload.append(fieldKey, documentFiles[fieldKey]);
+      });
+
       submitPayload.append("removed_images", JSON.stringify(removedPhotos));
-    }
 
-    try {
-      const endpoint = editingService
-        ? `${import.meta.env.VITE_API_BASE_URL}/api/service/update/${editingService.id}/`
-        : `${import.meta.env.VITE_API_BASE_URL}/api/service/${customerId}/`;
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-        body: submitPayload
-      });
-
-      if (response.ok) {
-        setServiceEdit(false);
-        resetFormState();
-        fetchServiceDataset();
-      } else {
-        const errorDetails = await response.json().catch(() => ({}));
-        alert(errorDetails.error || "Failed to save service record.");
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/site-visit/${customerId}/`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` },
+          body: submitPayload
+        });
+        if (response.ok) {
+          setSiteEdit(false);
+          setSelectedPhotos([]);
+          photoPreviews.forEach((url) => URL.revokeObjectURL(url));
+          setPhotoPreviews([]);
+          setRemovedPhotos([]);
+          setDocumentFiles({});
+          fetchSiteVisitDataset();
+        } else {
+          const errorDetails = await response.json();
+          alert(errorDetails.error || "Failed to save data.");
+        }
+      } catch (err) {
+        console.error("Synchronization error", err);
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      console.error("Service save error", err);
-    } finally {
-      setLoading(false);
+    };
+
+    if (!canView || accessDenied) {
+      return (
+        <div className="permission-locked-wrapper-card">
+          <div className="permission-locked-content-box">
+            <FaLock className="lock-vector-icon" />
+            <h3>Access Restricted</h3>
+            <p>You don't have permission to access the Site Visit metrics dashboard.</p>
+            {pendingRequests["view"] === "Pending" ? (
+              <div className="sitevisit-alert-success-banner">⚠️ View Request Pending Approval</div>
+            ) : (
+              <button
+                type="button"
+                className="request-access-trigger-btn"
+                onClick={() => handleRequestAccessSubmit("view")}
+                disabled={requestLoading || pendingRequests["view"] === "Pending"}
+              >
+                Request View Access
+              </button>
+            )}
+          </div>
+        </div>
+      );
     }
-  };
 
-  const triggerDeleteConfirmation = (service) => {
-    setModalConfig({
-      isOpen: true,
-      title: "Delete Service Record",
-      message: "Are you sure you want to delete this service log?",
-      onConfirm: () => deleteService(service.id)
-    });
-  };
-
-  // Backend: admins bypass check_permission entirely regardless of the matrix,
-  // and non-admins need an explicit 'delete' grant (never implied by 'update').
-  const canDeleteService = isUserAdmin || access.delete;
-
-  const deleteService = async (serviceId) => {
-    setModalConfig((prev) => ({ ...prev, isOpen: false }));
-    setLoading(true);
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/service/${serviceId}/`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
-      });
-
-      if (response.ok) {
-        fetchServiceDataset();
-      } else {
-        const errorDetails = await response.json().catch(() => ({}));
-        alert(errorDetails.error || "Failed to delete service record.");
-      }
-    } catch (err) {
-      console.error("Service delete error", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getRenderablePartsList = (partsField) => {
-    return buildPartsArray(partsField);
-  };
-
-  const getRenderableImagesList = (imagesField) => {
-    if (!imagesField) return [];
-    if (Array.isArray(imagesField)) return imagesField;
-    try {
-      return JSON.parse(imagesField);
-    } catch {
-      return [];
-    }
-  };
-
-  // Render Authentication Entry locking box structure if global matrix matrix schema criteria blocks visibility switches
-  if (!access.view) {
     return (
-      <div className="permission-locked-wrapper-card">
-        <div className="permission-locked-content-box">
-          <FaLock className="lock-vector-icon" />
-          <h3>Access Restricted</h3>
-          <p>You don't have permission to access the Service & Maintenance module.</p>
-          {pendingRequests["view"] ? (
-            <div className="sitevisit-alert-success-banner">⚠️ View Request Pending Approval</div>
-          ) : (
-            <button type="button" className="request-access-trigger-btn" onClick={() => handleRequestAccessSubmit("view")}>Request View Access</button>
-          )}
-        </div>
-      </div>
-    );
-  }
+      <div className="sitevisit-section">
+        {loading && <div className="sitevisit-loading-overlay"><div className="table-spinner"></div>Loading...</div>}
 
-  return (
-    <div className="sitevisit-section">
-      {loading && (
-        <div className="sitevisit-loading-overlay">
-          <div className="table-spinner"></div>
-          Loading...
-        </div>
-      )}
-
-      {!serviceEdit ? (
-        <div className="site-details-deck">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px" }}>
-            <h2 className="workspace-pane-title" style={{ margin: 0 }}>Service & Maintenance </h2>
-            <div style={{ display: "flex", gap: "10px", marginLeft: "auto" }}>
-              {!access.update && (
-                pendingRequests["update"] ? (
-                  <span style={{ fontSize: "0.8rem", color: "#ca8a04", fontWeight: "600" }}>⚠️ Update Request Pending</span>
-                ) : (
-                  <button type="button" className="request-permission-inline-btn" onClick={() => handleRequestAccessSubmit("update")} style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", padding: "4px 8px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", color: "#475569" }}>
-                    <FaPaperPlane size={10} /> Request Update Authorization
-                  </button>
-                )
-              )}
-              {access.update && (
-                <button type="button" className="btn-action-edit" onClick={openCreateForm}>
-                  + Add Service Record
-                </button>
-              )}
+        {!siteEdit ? (
+          <div className="site-details-deck">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px", marginBottom: "15px" }}>
+              <h2 className="workspace-pane-title" style={{ margin: 0 }}>Site Visit Details</h2>
+              <div style={{ display: "flex", gap: "10px", marginLeft: "auto" }}>
+                {visitData && !canUpdate && (
+                  pendingRequests["update"] === "Pending" ? (
+                    <span style={{ fontSize: "0.8rem", color: "#ca8a04", fontWeight: "600" }}>⚠️ Update Request Pending</span>
+                  ) : (
+                    <button type="button" className="request-permission-inline-btn" onClick={() => handleRequestAccessSubmit("update")} disabled={requestLoading} style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", padding: "4px 8px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", color: "#475569" }}>
+                      <FaPaperPlane size={10} /> Request Update Authorization
+                    </button>
+                  )
+                )}
+              </div>
             </div>
-          </div>
-
-          <div className="sort-container-wrapper">
-            <label htmlFor="service-sort-by">
-              Sort By:
-            </label>
-            <select
-              id="service-sort-by"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="sort-by-select"
-            >
-              <option value="created_desc">Newest Created</option>
-              <option value="created_asc">Oldest Created</option>
-              <option value="updated_desc">Last Modified (Newest First)</option>
-              <option value="updated_asc">Last Modified (Oldest First)</option>
-            </select>
-          </div>
-
-          {serviceList.length > 0 ? (
-            <div className="detail-data-grid">
-              {serviceList.map((service) => {
-                const parts = getRenderablePartsList(service.parts_replaced);
-                const images = getRenderableImagesList(service.images);
-
-                return (
-                  <div key={service.id} className="service-card">
-                    <div className="service-card-header">
-                      <div>
-                        <span className="service-card-number" style={{ display: "block", fontWeight: 700, fontSize: "0.8rem", color: "#64748b", letterSpacing: "0.03em",marginBottom: "10px" }}>
-                          Service #{service.service_number ?? "—"}
-                        </span>
-                        <h4 className="service-card-title" style={{ margin: 0 }}>{service.service_type || "Service"}</h4>
-                      </div>
-                      <div className="service-card-actions">
-                        <button
-                          type="button"
-                          className="btn-action-view"
-                          onClick={() => setExpandedService(service)}
-                          title="View full details"
-                          style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "6px 10px", cursor: "pointer", color: "#334155" }}
-                        >
-                          <FaEye />
-                        </button>
-                        {access.update && (
-                          <button type="button" className="btn-action-edit" onClick={() => openEditForm(service)}>
-                            <FaEdit />
-                          </button>
-                        )}
-                        {canDeleteService && (
-                          <button type="button" className="btn-action-delete" onClick={() => triggerDeleteConfirmation(service)} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                            <FaTrashAlt /> 
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="service-card-body">
-                      <p className="service-field"><strong>Date:</strong> {formatDate(service.service_date)}</p>
-                      <p className="service-field"><strong>Technician:</strong> {service.technician_name || "N/A"}</p>
-                      <p className="service-field"><strong>Status:</strong> {service.system_status || "N/A"}</p>
-                      <p className="service-field service-field-complaint"><strong>Complaint:</strong> {service.complaint_issue || "No complaint noted"}</p>
-                      {parts.length > 0 && (
-                        <p className="service-field"><strong>Parts:</strong> {parts.join(", ")}</p>
-                      )}
-                    </div>
-
-                    
-                      <div className="service-card-comments">
-                        <label className="narrative-label">Comments</label>
-                        <p>{service.comments}</p>
-                      </div>
-                    
-
-                    <div className="service-card-gallery">
-                      <h5>Images</h5>
-                      {images.length > 0 ? (
-                        <div className="service-gallery-grid">
-                          {images.map((img, index) => (
-                            <a key={`${service.id}-${index}`} href={img} target="_blank" rel="noreferrer" className="gallery-thumbnail-wrapper">
-                              <img src={img} alt={`service-${service.id}-${index}`} className="gallery-thumbnail-element" />
-                            </a>
-                          ))}
-                        </div>
+            
+            <>
+                <div className="detail-data-grid">
+                  <div className="detail-item-node">
+                    <span className="node-label">Customer Name:</span>
+                    <span className="node-value">{visitData?.customer_name || customer?.name || "N/A"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Location Mapping:</span>
+                    <span className="node-value">
+                      {visitData?.location ? (
+                        <a href={getGoogleMapsUrl(visitData.location)} target="_blank" rel="noopener noreferrer" className="maps-hyperlink">
+                          <FaMapMarkerAlt style={{ marginRight: "6px" }} />
+                          {visitData.location.includes(" | ") ? visitData.location.split(" | ")[1] : "View Map Location"}
+                        </a>
                       ) : (
-                        <div className="service-gallery-empty">No images uploaded</div>
+                        "N/A"
                       )}
+                    </span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Panel Capacity:</span>
+                    <span className="node-value">{visitData?.panel_capacity ? `${visitData.panel_capacity} KW` : "N/A"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">System Capacity:</span>
+                    <span className="node-value">{visitData?.system_capacity ? `${visitData.system_capacity} KW` : "N/A"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Feasibility Status:</span>
+                    <span className="node-value">{visitData?.feasibility || "N/A"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Project Cost:</span>
+                    <span className="node-value text-emerald">{visitData?.project_cost ? `₹${parseFloat(visitData.project_cost).toLocaleString('en-IN')}` : "N/A"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Load Enhancement:</span>
+                    <span className="node-value">{visitData?.load_enhancement === "Yes" ? "Yes" : "No"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Ownership Change:</span>
+                    <span className="node-value">{visitData?.ownership_change === "Yes" ? "Yes" : "No"}</span>
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">WiFi Availability:</span>
+                    <span className="node-value">{visitData?.wifi === "Yes" ? "Yes" : "No"}</span>
+                  </div>
+                </div>
+
+                <div className="text-narrative-block">
+                  <label className="narrative-label" style={{color:"#030303"}}>Changes</label>
+                  <div className="changes-block"> 
+                    <p className="changes-text-display">{visitData?.changes || "No changes recorded."}</p>
+                  </div>
+                </div>
+
+                <div className="document-vault-section">
+                  <h4 className="vault-group-title">Contractual Agreements & Files</h4>
+                  {visitData?.quotation_file || visitData?.agreement_file ? (
+                    <div className="custom-box-card">
+                      <div className="doc-preview-badge-row">
+                        {visitData.quotation_file && (
+                          <a href={getPdfPreviewUrl(visitData.quotation_file)} target="_blank" rel="noopener noreferrer" className="vault-doc-badge">
+                            📄 Quotation Scheme
+                          </a>
+                        )}
+                        {visitData.agreement_file && (
+                          <a href={getPdfPreviewUrl(visitData.agreement_file)} target="_blank" rel="noopener noreferrer" className="vault-doc-badge">
+                            📄 Formal Agreement
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="empty-record-placeholder-tray layout-margin-top-adjust">
+                      <p className="placeholder-primary-msg">No files available.</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="document-vault-section">
+                  <h4 className="vault-group-title">Verification Documents</h4>
+                  {visitData && VERIFICATION_DOC_KEYS.some(docKey => visitData[docKey]) ? (
+                    <div className="doc-preview-badge-row">
+                      {VERIFICATION_DOC_KEYS.map((docKey) => 
+                        visitData[docKey] && (
+                          <a key={docKey} href={getPdfPreviewUrl(visitData[docKey])} target="_blank" rel="noopener noreferrer" className="vault-doc-badge">
+                            📄 {docKey.toUpperCase().replace("_", " ")}
+                          </a>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    <div className="empty-record-placeholder-tray layout-margin-top-adjust">
+                      <p className="placeholder-primary-msg">No files uploaded.</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-narrative-block">
+                  <label className="narrative-label">Comments</label>
+                  <p className="comments-text-display">{visitData?.comments || "No assessment comments filed."}</p>
+                </div>              
+
+                {existingPhotos.length > 0 && (
+                  <div className="document-vault-section">
+                    <h4 className="vault-group-title">Images</h4>
+                    <div className="payment-receipts-gallery-grid">
+                      {existingPhotos.map((img, i) => (
+                        <a key={i} href={img} target="_blank" rel="noopener noreferrer" className="receipt-gallery-item-card">
+                          <img src={img} alt={`site-reference-${i}`} className="gallery-thumbnail-element" />
+                        </a>
+                      ))}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="empty-record-placeholder-tray centered-placeholder-box" style={{ padding: "40px 20px" }}>
-              <p className="placeholder-primary-msg" style={{ marginBottom: "15px" }}>No service records have been added yet for this customer.</p>
-              {!access.update && (
-                pendingRequests["update"] ? (
-                  <div className="sitevisit-alert-success-banner">{pendingRequests["update"]}</div>
-                ) : (
-                  <button type="button" className="request-access-trigger-btn" onClick={() => handleRequestAccessSubmit("update")}>Request Update Authorization</button>
-                )
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        <form onSubmit={triggerSaveConfirmation} className="interactive-form-workspace">
-          <h2 className="workspace-pane-title">
-            {editingService ? `Edit Service Record — Service #${editingService.service_number ?? "—"}` : "Add New Service Record"}
-          </h2>
+                )}
 
+                <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px", gap: "12px" }}>
+                  {canUpdate && (
+                    <button type="button" className="btn-action-edit" onClick={() => setSiteEdit(true)}>
+                      <FaEdit style={{ marginRight: "6px" }} /> {visitData?.id ? "Edit Details" : "Add Site Visit Details"}
+                    </button>
+                  )}
+                </div>
+              </>
+            
+          </div>
+        ) : (
+          <form onSubmit={triggerSaveConfirmation} className="interactive-form-workspace">
+            <h2 className="workspace-pane-title">{visitData?.id ? "Edit Site Visit Details" : "Add New Site Visit"}</h2>
+            
           <div className="form-grid-layout">
-            <div className="form-group-element">
-              <label>Service Date *</label>
-              <input type="date" name="service_date" value={formData.service_date} onChange={handleInputChange} disabled={!access.update} required />
-            </div>
-            <div className="form-group-element">
-              <label>Service Type *</label>
-              <select name="service_type" value={formData.service_type} onChange={handleInputChange} disabled={!access.update} required>
-                <option value="Maintenance">Maintenance</option>
-                <option value="Repair">Repair</option>
-                <option value="Inspection">Inspection</option>
-              </select>
-            </div>
-            <div className="form-group-element">
-              <label>Technician Name</label>
-              <input type="text" name="technician_name" value={formData.technician_name} onChange={handleInputChange} disabled={!access.update} />
-            </div>
-            <div className="form-group-element">
-              <label>System Status</label>
-              <select name="system_status" value={formData.system_status} onChange={handleInputChange} disabled={!access.update}>
-                <option value="Operational">Normal</option>
-                <option value="Faulty">Faulty</option>
-                <option value="Needs Attention">Needs Attention</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
-            <label>Complaint / Issue</label>
-            <textarea name="complaint_issue" value={formData.complaint_issue} onChange={handleInputChange} disabled={!access.update} rows="3" />
-          </div>
-
-          <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
-            <label>Parts Replaced</label>
-            <textarea name="parts_replaced" value={formData.parts_replaced} onChange={handleInputChange} disabled={!access.update} rows="3" placeholder="e.g. Inverter, Battery" />
-          </div>
-
-          <div className="form-group-element" style={{ marginTop: "16px" }}>
-            <label>Next Service Due</label>
-            <input type="date" name="next_service_due" value={formData.next_service_due} onChange={handleInputChange} disabled={!access.update} />
-          </div>
-
-          <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
-            <label>Comments</label>
-            <textarea name="comments" value={formData.comments} onChange={handleInputChange} disabled={!access.update} rows="3" />
-          </div>
-
-          <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
-            <h4 className="vault-group-title">Service Images</h4>
-            <div className="form-group-element multi-file-zone-pad">
-              <input type="file" multiple accept="image/*" className="vault-raw-file-selector" onChange={handlePhotoArrayChange} disabled={!access.update} />
-            </div>
-
-            <div className="interactive-gallery-preview-deck">
-              {photoPreviews.map((blobUrl, index) => (
-                <div key={`local-${index}`} className="gallery-preview-wrapper-node">
-                  <img src={blobUrl} alt="local preview" />
-                  <button type="button" className="gallery-remove-node-trigger" onClick={() => handleRemoveNewPhoto(index)} disabled={!access.update}>✖</button>
-                </div>
-              ))}
-              {existingPhotos.map((url, index) => (
-                <div key={`exist-${index}`} className="gallery-preview-wrapper-node">
-                  <img src={url} alt="cloud storage asset" />
-                  <button type="button" className="gallery-remove-node-trigger" onClick={() => handleRemoveExistingPhoto(index, url)} disabled={!access.update}>✖</button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px" }}>
-            {access.update && <button type="submit" className="btn-action-edit">Save Service Record</button>}
-            <button
-              type="button"
-              className="btn-action-cancel"
-              onClick={() => {
-                setServiceEdit(false);
-                resetFormState();
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-
-      <ConfirmationModal
-        isOpen={modalConfig.isOpen}
-        title={modalConfig.title}
-        message={modalConfig.message}
-        onConfirm={modalConfig.onConfirm}
-        onCancel={() => setModalConfig((prev) => ({ ...prev, isOpen: false }))}
+    <div className="form-group-element">
+      <label>Panel Capacity (KW) *</label>
+      <input 
+        type="number" 
+        name="panel_capacity" 
+        step="0.5" 
+        min={1}
+        value={formData.panel_capacity} 
+        onChange={handleInputChange} 
+        onWheel={(e) => e.target.blur()} 
+        disabled={!canUpdate} 
+        required 
       />
-
-      {expandedService && (
-        <div
-          className="service-zoom-overlay"
-          onClick={() => setExpandedService(null)}
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(15, 23, 42, 0.55)",
-            backdropFilter: "blur(6px)",
-            WebkitBackdropFilter: "blur(6px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "24px"
-          }}
-        >
-          <div
-            className="service-zoom-box"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: "relative",
-              background: "#fff",
-              borderRadius: "16px",
-              width: "min(900px, 95vw)",
-              maxHeight: "90vh",
-              overflowY: "auto",
-              padding: "40px",
-              boxShadow: "0 25px 60px rgba(0,0,0,0.35)",
-              fontSize: "1.15rem",
-              lineHeight: 1.6
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setExpandedService(null)}
-              title="Close"
-              style={{
-                position: "absolute",
-                top: "16px",
-                right: "16px",
-                background: "#f1f5f9",
-                border: "1px solid #cbd5e1",
-                borderRadius: "50%",
-                width: "40px",
-                height: "40px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-                fontSize: "1.1rem",
-                color: "#334155"
-              }}
-            >
-              <FaTimes />
-            </button>
-
-            <span style={{ display: "block", fontWeight: 700, fontSize: "1rem", color: "#64748b", letterSpacing: "0.03em", marginBottom: "8px" }}>
-              Service #{expandedService.service_number ?? "—"}
-            </span>
-            <h2 style={{ margin: "0 0 24px 0", fontSize: "1.8rem" }}>{expandedService.service_type || "Service"}</h2>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px 32px", marginBottom: "24px" }}>
-              <p style={{ margin: 0, fontSize: "1.15rem" }}><strong>Date:</strong> {formatDate(expandedService.service_date)}</p>
-              <p style={{ margin: 0, fontSize: "1.15rem" }}><strong>Technician:</strong> {expandedService.technician_name || "N/A"}</p>
-              <p style={{ margin: 0, fontSize: "1.15rem" }}><strong>Status:</strong> {expandedService.system_status || "N/A"}</p>
-              <p style={{ margin: 0, fontSize: "1.15rem" }}><strong>Next Service Due:</strong> {formatDate(expandedService.next_service_due)}</p>
-            </div>
-
-            <p style={{ fontSize: "1.15rem" }}><strong>Complaint:</strong> {expandedService.complaint_issue || "No complaint noted"}</p>
-
-            {getRenderablePartsList(expandedService.parts_replaced).length > 0 && (
-              <p style={{ fontSize: "1.15rem" }}><strong>Parts:</strong> {getRenderablePartsList(expandedService.parts_replaced).join(", ")}</p>
-            )}
-
-            {expandedService.comments && (
-              <div style={{ marginTop: "20px" }}>
-                <label className="narrative-label" style={{ fontSize: "1rem", fontWeight: 700 }}>Comments</label>
-                <p style={{ fontSize: "1.15rem" }}>{expandedService.comments}</p>
-              </div>
-            )}
-
-            <div style={{ marginTop: "28px" }}>
-              <h5 style={{ fontSize: "1.25rem", marginBottom: "14px" }}>Images</h5>
-              {getRenderableImagesList(expandedService.images).length > 0 ? (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "18px" }}>
-                  {getRenderableImagesList(expandedService.images).map((img, index) => (
-                    <a key={`zoom-${expandedService.id}-${index}`} href={img} target="_blank" rel="noreferrer">
-                      <img
-                        src={img}
-                        alt={`service-${expandedService.id}-${index}`}
-                        style={{ width: "100%", height: "220px", objectFit: "cover", borderRadius: "10px", border: "1px solid #e2e8f0" }}
-                      />
-                    </a>
-                  ))}
-                </div>
-              ) : (
-                <div className="service-gallery-empty" style={{ fontSize: "1.1rem" }}>No images uploaded</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
-  );
-};
+    <div className="form-group-element">
+      <label>System Capacity (KW) *</label>
+      <input 
+        type="number" 
+        name="system_capacity" 
+        step="0.5" 
+        min={1} 
+        value={formData.system_capacity} 
+        onChange={handleInputChange} 
+        onWheel={(e) => e.target.blur()} 
+        disabled={!canUpdate} 
+        required 
+      />
+    </div>
+    <div className="form-group-element">
+      <label>Structural Feasibility</label>
+      <div className="thematic-radio-wrapper-row">
+        <label className="radio-option-node">
+          <input type="radio" name="feasibility" value="Yes" checked={formData.feasibility === "Yes"} onChange={handleInputChange} disabled={!canUpdate} /> <span>Yes</span>
+        </label>
+        <label className="radio-option-node">
+          <input type="radio" name="feasibility" value="No" checked={formData.feasibility === "No"} onChange={handleInputChange} disabled={!canUpdate} /> <span>No</span>
+        </label>
+      </div>
+    </div>
+    <div className="form-group-element">
+      <label>Project Cost (₹) *</label>
+      <input 
+        type="number" 
+        name="project_cost" 
+        step="0.5" 
+        min={0} 
+        value={formData.project_cost} 
+        onChange={handleInputChange} 
+        onWheel={(e) => e.target.blur()} 
+        disabled={!canUpdate} 
+        required 
+      />
+    </div>
+  </div>
 
-export default Services;
+            <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
+              <h4 className="vault-group-title">Structural Requirements</h4>
+              <div className="form-grid-layout" style={{ paddingTop: "8px" }}>
+                <div className="form-group-element">
+                  <label className="kseb-checkbox-custom-label">
+                    <input
+                      type="checkbox"
+                      checked={formData.ownership_change === "Yes"}
+                      onChange={(e) => handleCheckboxChange("ownership_change", e.target.checked)}
+                      disabled={!canUpdate}
+                    />
+                    <span className="kseb-checkbox-text">Ownership / Name Change Required</span>
+                  </label>
+                </div>
+
+                <div className="form-group-element">
+                  <label className="kseb-checkbox-custom-label">
+                    <input
+                      type="checkbox"
+                      checked={formData.load_enhancement === "Yes"}
+                      onChange={(e) => handleCheckboxChange("load_enhancement", e.target.checked)}
+                      disabled={!canUpdate}
+                    />
+                    <span className="kseb-checkbox-text">Load Enhancement Required</span>
+                  </label>
+                </div>
+                <div className="form-group-element">
+                  <label className="kseb-checkbox-custom-label">
+                    <input
+                      type="checkbox"
+                      checked={formData.wifi === "Yes"}
+                      onChange={(e) => handleCheckboxChange("wifi", e.target.checked)}
+                      disabled={!canUpdate}
+                    />
+                    <span className="kseb-checkbox-text">WiFi Availability</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            
+            <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
+              <label>Changes</label>
+              <textarea name="changes" value={formData.changes || ""} onChange={handleInputChange} rows="3" disabled={!canUpdate} />
+            </div>
+
+            <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
+              <label>Comments</label>
+              <textarea name="comments" value={formData.comments || ""} onChange={handleInputChange} rows="3" disabled={!canUpdate} />
+            </div>
+
+            <div className="form-group-element geolocation-broker-box" style={{ marginTop: "16px" }}>
+              <label>Location</label>
+              <div className="gps-input-compound-field">
+                <input name="location" value={formData.location || ""} onChange={handleInputChange} placeholder="GPS Coordinates | Geographic Address String" disabled={!canUpdate} />
+                <button type="button" className="gps-auto-trigger-btn" onClick={handleLocationAutoFill} disabled={locationLoading || !canUpdate}>
+                  {locationLoading ? <span className="micro-loading-loop"></span> : <FaLocationCrosshairs />}
+                </button>
+              </div>
+            </div>
+
+            <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
+              <h4 className="vault-group-title">Primary Contract Schemes Upload</h4>
+              <div className="form-grid-layout">
+                <div className="form-group-element">
+                  <label>{visitData?.quotation_file && <span className="vault-upload-status-tick">✓ </span>}Quotation Asset (PDF)</label>
+                  <input type="file" name="quotation_file" accept=".pdf" className="vault-raw-file-selector" onChange={handleDocumentChange} disabled={!canUpdate} />
+                </div>
+                <div className="form-group-element">
+                  <label>{visitData?.agreement_file && <span className="vault-upload-status-tick">✓ </span>}Formal Mutual Agreement (PDF)</label>
+                  <input type="file" name="agreement_file" accept=".pdf" className="vault-raw-file-selector" onChange={handleDocumentChange} disabled={!canUpdate} />
+                </div>
+              </div>
+            </div>
+
+            <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
+              <h4 className="vault-group-title">Verification Documents</h4>
+              <div className="form-grid-layout">
+                {VERIFICATION_DOC_KEYS.map((docKey) => (
+                  <div className="form-group-element" key={docKey}>
+                    <label>{visitData?.[docKey] && <span className="vault-upload-status-tick">✓ </span>}{docKey.toUpperCase().replace("_", " ")}</label>
+                    <input type="file" name={docKey} accept="application/pdf, image/*" className="vault-raw-file-selector" onChange={handleDocumentChange} disabled={!canUpdate} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
+              <h4 className="vault-group-title">Images Asset Manager</h4>
+              <div className="form-group-element multi-file-zone-pad">
+                <input type="file" multiple accept="image/*" className="vault-raw-file-selector" onChange={handlePhotoArrayChange} disabled={!canUpdate} />
+              </div>
+              
+              <div className="interactive-gallery-preview-deck">
+                {photoPreviews.map((blobUrl, i) => (
+                  <div key={`local-${i}`} className="gallery-preview-wrapper-node">
+                    <img src={blobUrl} alt="local preview" />
+                    <button type="button" className="gallery-remove-node-trigger" onClick={() => handleRemoveNewPhoto(i)} disabled={!canUpdate}>✖</button>
+                  </div>
+                ))}
+                {existingPhotos.map((url, i) => (
+                  <div key={`exist-${i}`} className="gallery-preview-wrapper-node">
+                    <img src={url} alt="cloud storage asset" />
+                    <button type="button" className="gallery-remove-node-trigger" onClick={() => handleRemoveExistingPhoto(i, url)} disabled={!canUpdate}>✖</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px" }}>
+              {canUpdate && <button type="submit" className="btn-action-edit">Save Changes</button>}
+              <button type="button" className="btn-action-cancel" onClick={() => { setSiteEdit(false); setSelectedPhotos([]); photoPreviews.forEach((url) => URL.revokeObjectURL(url)); setPhotoPreviews([]); setRemovedPhotos([]); setDocumentFiles({}); setExistingPhotos(visitData?.images || []); if(visitData) { setFormData({ panel_capacity: String(visitData.panel_capacity), system_capacity: String(visitData.system_capacity), feasibility: visitData.feasibility || "Yes", project_cost: String(visitData.project_cost), location: visitData.location || "", comments: visitData.comments || "", ownership_change: visitData.ownership_change || "No", load_enhancement: visitData.load_enhancement || "No", wifi: visitData.wifi || "No" }); } else { resetFormDataState(); } }}>Cancel</button>
+            </div>
+          </form>
+        )}
+
+        <ConfirmationModal
+          isOpen={modalConfig.isOpen}
+          title={modalConfig.title}
+          message={modalConfig.message}
+          onConfirm={modalConfig.onConfirm}
+          onCancel={() => setModalConfig((prev) => ({ ...prev, isOpen: false }))}
+        />
+      </div>
+    );
+  };
+
+  export default SiteVisit;
