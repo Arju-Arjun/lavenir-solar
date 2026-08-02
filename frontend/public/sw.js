@@ -17,7 +17,7 @@ self.addEventListener('push', (event) => {
     data: { url: data.url || '/' }
   }
 
-  event.waitUntil(self.registration.showNotification(data.title || 'Solar Project', options))
+  event.waitUntil(self.registration.showNotification(data.title || 'Lavenir Solar', options))
 })
 
 self.addEventListener('notificationclick', (event) => {
