@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Login from './components/Login';
 import ForgotPassword from './components/Forgotpassword';
-import ResetPassword from './components/ResetPassword';
+import ResetPassword from './components/ResetPassword';   
 import AdminDashboard from './admin/AdminDashboard';
 import StaffDashboard from './staff/StaffDashboard';
 import CustomersView from './customer/CustomersView';
