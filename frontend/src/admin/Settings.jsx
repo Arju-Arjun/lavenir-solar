@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 // import AddNewStaff from './AddStaff';
 import StaffDirectory from './StaffDirectory';
 import PermissionManagement from './PermissionManagement';
@@ -6,6 +6,7 @@ import PermissionRequests from './PermissionRequests';
 const Settings = () => {
   // Define active tabs matching the required settings modules
   const [activeTab, setActiveTab] = useState('staff-directory');
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
 
   const tabs = [
     
@@ -13,6 +14,27 @@ const Settings = () => {
     { id: 'roles-permissions', label: 'Roles & Permissions Management' },
     { id: 'permission-requests', label: 'Permission Requests' },
   ];
+
+  // Fetch the pending permission request count so the tab badge is accurate
+  // even before the Permission Requests tab has been opened.
+  useEffect(() => {
+    const fetchPendingCount = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/staff/permissions/requests/all`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPendingRequestCount((data.pending || []).length);
+        }
+      } catch (err) {
+        console.error('Failed to fetch pending permission request count:', err);
+      }
+    };
+    fetchPendingCount();
+  }, []);
 
   return (
     <div className="customer-profile-master-pane">
@@ -35,6 +57,11 @@ const Settings = () => {
             onClick={() => setActiveTab(tab.id)}
           >
             {tab.label}
+            {tab.id === 'permission-requests' && pendingRequestCount > 0 && (
+              <span className="pending-count-badge">
+                {pendingRequestCount}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -53,7 +80,7 @@ const Settings = () => {
 
 
       {activeTab === 'permission-requests' && (
-          <PermissionRequests />
+          <PermissionRequests onPendingCountChange={setPendingRequestCount} />
           )}
       </div>
     </div>

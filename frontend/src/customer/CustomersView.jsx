@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import AddCustomer from './AddCustomer';
 import AdvancedFilterPanel, { buildEmptyFilters, cleanFilters } from './AdvancedFilterPanel';
 
+const SEARCH_DEBOUNCE_MS = 400;
+
 export default function CustomersView() {
+  // searchInput is what the text box shows; searchQuery is the debounced
+  // value that actually triggers a fetch, so we don't hit the API on
+  // every keystroke.
+  const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('created_date');
 
@@ -33,10 +39,18 @@ export default function CustomersView() {
     { key: 'mnreinstallation_work_done', label: 'MNRE Installation', link: 'mnre-installation' }
   ];
 
+  // Debounce the search box so typing doesn't fire a request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(searchInput), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
   useEffect(() => {
     const fetchCustomers = async () => {
       try {
         setLoading(true);
+        setError(null);
+
         const queryParams = new URLSearchParams({
           search: searchQuery,
           sort_by: sortBy,
@@ -48,26 +62,27 @@ export default function CustomersView() {
           queryParams.set('filters', JSON.stringify(cleaned));
         }
 
-        const token = localStorage.getItem('token'); 
+        const token = localStorage.getItem('token');
+        const headers = { 'Content-Type': 'application/json' };
+        if (token && token !== 'null') {
+          headers.Authorization = `Bearer ${token}`;
+        }
 
         const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/customers/?${queryParams.toString()}`, {
           method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': token && token !== 'null' ? `Bearer ${token}` : ''
-          }
+          headers
         });
 
         if (response.status === 401) {
           localStorage.removeItem('token');
           localStorage.removeItem('user_role');
-          window.location.reload(); 
-          throw new Error('Your session has expired or you lack permission. Please log in again.');
+          window.location.reload();
+          return;
         }
 
         if (!response.ok) throw new Error(`Server returned status ${response.status}`);
         const result = await response.json();
-        
+
         if (result.success && Array.isArray(result.data)) {
           setCustomers(result.data);
         } else if (Array.isArray(result)) {
@@ -103,7 +118,7 @@ export default function CustomersView() {
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [showAddForm]);
-  
+
   const handleRowClick = (id, event) => {
     if (event.target.tagName === 'BUTTON' || event.target.closest('button')) return;
     setExpandedRowId(expandedRowId === id ? null : id);
@@ -126,12 +141,12 @@ export default function CustomersView() {
       </div>
 
       <div className="control-filter-panel">
-        <input 
+        <input
           type="text"
           className="search-bar-input"
           placeholder="Search by Customer Name or Place..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
         />
         <div className="dropdown-controls-group">
           <select className="control-select-dropdown" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
@@ -204,31 +219,45 @@ export default function CustomersView() {
                       </tr>
 
                       {isExpanded && (
-                        <tr className="accordion-drawer-row">
-                          <td colSpan="8">
-                            <div className="expanded-drawer-container">
-                              <h4 className="drawer-section-title">Project Workflow Progress</h4>
-                              <div className="horizontal-workflow-diagram">
-                                {workflowStages.map((stage, idx) => {
-                                  // Evaluate completion state based on explicit backend properties
-                                  const isCompleted = customer[stage.key] === 'Completed';
-                                  const nodeStatusClass = isCompleted ? 'node-completed' : 'node-pending';
+                       <tr className="accordion-drawer-row">
+                        <td colSpan="8">
+                          <div className="expanded-drawer-container">
+                            <h4 className="drawer-section-title">Project Workflow Progress</h4>
+                            <div className="horizontal-workflow-diagram">
+                              {workflowStages.map((stage, idx) => {
+                                // Evaluate completion state based on explicit backend properties
+                                const isCompleted = customer[stage.key] === 'Completed';
+                                const nodeStatusClass = isCompleted ? 'node-completed' : 'node-pending';
 
-                                  return (
-                                    <div 
-                                      key={stage.key} 
-                                      className={`workflow-node-block ${nodeStatusClass}`}
-                                      onClick={() => handleNavigationRedirect(recordId, stage.link)}
-                                    >
-                                      <div className="node-marker-circle">{isCompleted ? '✓' : idx + 1}</div>
-                                      <span className="node-text-label">{stage.label}</span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
+                                // Check if the current stage is Bank Loan
+                                const isBankLoanStage = stage.label === 'Bank Loan' || stage.key === 'bankloan_work_done';
+
+                                // Assuming your backend passes a 'need_loan' boolean.
+                                // If need_loan is exactly false, we mark it as Not Required.
+                                const isLoanNotRequired = isBankLoanStage && customer.need_loan === false;
+
+                                return (
+                                  <div
+                                    key={stage.key}
+                                    className={`workflow-node-block ${nodeStatusClass}`}
+                                    onClick={() => handleNavigationRedirect(recordId, stage.link)}
+                                  >
+                                    <div className="node-marker-circle">{isCompleted ? '✓' : idx + 1}</div>
+                                    <span className="node-text-label">{stage.label}</span>
+
+                                    {/* Conditionally render "Not Required" text under Bank Loan */}
+                                    {isLoanNotRequired && (
+                                      <span className="node-sub-text" style={{ fontSize: '11px', color: '#888', marginTop: '4px', display: 'block' }}>
+                                        (Not Required)
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
-                          </td>
-                        </tr>
+                          </div>
+                        </td>
+                      </tr>
                       )}
                     </React.Fragment>
                   );
@@ -241,12 +270,12 @@ export default function CustomersView() {
 
       {showAddForm && (
         <div className="customer-modal-overlay">
-          <AddCustomer 
-            onCancel={() => setShowAddForm(false)} 
+          <AddCustomer
+            onCancel={() => setShowAddForm(false)}
             onSuccess={() => {
               setShowAddForm(false);
-              window.location.reload(); 
-            }} 
+              window.location.reload();
+            }}
           />
         </div>
       )}

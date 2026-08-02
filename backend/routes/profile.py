@@ -7,18 +7,29 @@ import cloudinary.uploader
 
 profile_bp = Blueprint('profile', __name__)
 
-def delete_cloudinary_image(image_url): 
+MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB - keep well under Cloudinary's 10MB cap
+
+
+def delete_cloudinary_image(image_url):
     if not image_url or "res.cloudinary.com" not in image_url or "sample.jpg" in image_url:
-        return 
-    try: 
-        pattern = r"/v\d+/(.+)\.[a-zA-Z0-9]+$" 
-        match = re.search(pattern, image_url) 
-        if match: 
+        return
+    try:
+        pattern = r"/v\d+/(.+)\.[a-zA-Z0-9]+$"
+        match = re.search(pattern, image_url)
+        if match:
             public_id = match.group(1)
             cloudinary.uploader.destroy(public_id)
             print(f"Successfully removed old Cloudinary asset: {public_id}")
-    except Exception as e: 
+    except Exception as e:
         print(f"Cloudinary file removal skipped or failed: {str(e)}")
+
+
+def _get_file_size(file_storage):
+    """Return size in bytes of a Werkzeug FileStorage without consuming the stream."""
+    file_storage.seek(0, 2)  # seek to end
+    size = file_storage.tell()
+    file_storage.seek(0)  # reset for later reads (e.g. cloudinary upload)
+    return size
 
 
 @profile_bp.route('/me', methods=['GET'])
@@ -54,6 +65,22 @@ def update_profile():
             if 'profile_photo' in request.files:
                 file_to_upload = request.files['profile_photo']
                 if file_to_upload.filename != '':
+
+                    # --- Server-side size validation (defense in depth) ---
+                    file_size = _get_file_size(file_to_upload)
+                    if file_size > MAX_UPLOAD_SIZE:
+                        return jsonify({
+                            "success": False,
+                            "message": f"Profile photo is too large ({file_size / 1024 / 1024:.1f}MB). Maximum is 5MB."
+                        }), 400
+
+                    # --- Basic content-type validation ---
+                    if not (file_to_upload.mimetype or '').startswith('image/'):
+                        return jsonify({
+                            "success": False,
+                            "message": "Uploaded file must be an image."
+                        }), 400
+
                     try:
                         upload_result = cloudinary.uploader.upload(file_to_upload, folder="solar_profiles")
                     except Exception as upload_err:
@@ -61,11 +88,11 @@ def update_profile():
                             "success": False,
                             "message": f"Profile photo upload failed: {str(upload_err)}"
                         }), 502
-                    
+
                     # Delete the old profile photo from Cloudinary if it exists
                     if user.profile_photo:
                         delete_cloudinary_image(user.profile_photo)
-                        
+
                     user.profile_photo = upload_result.get('secure_url')
         else:
             # Fallback for JSON requests (e.g. text updates or direct image URLs)
@@ -74,7 +101,7 @@ def update_profile():
                 user.full_name = data['full_name']
             if 'phone_number' in data:
                 user.phone_number = data['phone_number']
-                
+
             if 'profile_photo' in data and data['profile_photo'] != user.profile_photo:
                 profile_photo = data['profile_photo']
                 if profile_photo.startswith('http'):

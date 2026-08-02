@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import ConfirmationModal from '../components/ConfirmationModal';
 
-const PermissionRequests = () => {
+const PermissionRequests = ({ onPendingCountChange } = {}) => {
   const [pendingRequests, setPendingRequests] = useState([]);
   const [processedRequests, setProcessedRequests] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -19,6 +19,13 @@ const PermissionRequests = () => {
   useEffect(() => {
     fetchRequestsWorkspace();
   }, []);
+
+  // Keep the parent (Settings tab badge / sidebar) in sync with the live pending count
+  useEffect(() => {
+    if (typeof onPendingCountChange === 'function') {
+      onPendingCountChange(pendingRequests.length);
+    }
+  }, [pendingRequests, onPendingCountChange]);
 
   // Helper utility to inject JWT authorization signatures into requests safely
   const getAuthHeaders = (contentType = 'application/json') => {

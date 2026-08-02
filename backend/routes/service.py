@@ -56,18 +56,6 @@ def check_module_access():
     uid = int(get_jwt_identity())
     response, status_code = handle_blueprint_check_access(uid, MODULE_NAME)
     access_data = response.get_json()
-    
-    pending_records = PermissionRequest.query.filter_by(
-        user_id=uid,
-        module_name=MODULE_NAME,
-        status='Pending'
-    ).all()
-    
-    pending_requests_map = {}
-    for req in pending_records:
-        pending_requests_map[req.permission_type] = "Access request pending approval."
-        
-    access_data['pending_requests'] = pending_requests_map
     return jsonify(access_data), status_code
 
 
@@ -221,7 +209,7 @@ def create_service(customer_id):
     db.session.add(audit_log)
     db.session.commit()
 
-    from routes.notification_rules import notify_admins, get_actual_maintenance_data
+    from routes.notification_rules import notify_module_staff, get_actual_maintenance_data
 
     print(f"DEBUG: service_type received = {repr(service_type)}")  # TEMP: remove after debugging
 
@@ -229,11 +217,12 @@ def create_service(customer_id):
         actual_count, actual_last_date = get_actual_maintenance_data(customer)
         print(f"DEBUG: recalculated maintenance_count={actual_count}, last_maintenance_added_date={actual_last_date}")  # TEMP
 
-    notify_admins(
+    notify_module_staff(
         customer,
         title="Service Completed",
         body=f"Service #{new_service.service_number} was added for {customer.customer_name}.",
-        notif_type="service_complete"
+        notif_type="service_complete",
+        gap_seconds=0
     )
 
     return jsonify({"message": "Service log generated successfully", "service": new_service.to_dict()}), 201

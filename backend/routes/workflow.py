@@ -112,10 +112,10 @@ def get_workflow_status(customer_id):
         if len(_load_json_list(payment.proof_file)) == 0: pending.append('Payment Proof')
         result['payment'] = _module_result('Payment Flow', len(pending) == 0, pending)
 
-    # ---------------- KSEB Utility ----------------
+    # ---------------- KSEB Feasibility ----------------
     kseb_data = KSEB.query.filter_by(customer_project_id=customer.id).first()
     if not kseb_data:
-        result['kseb'] = _module_result('KSEB Utility', False, ['Not started'])
+        result['kseb'] = _module_result('KSEB Feasibility', False, ['Not started'])
     else:
         pending = []
         if visit and visit.ownership_change == 'Yes' and kseb_data.ownership_status != 'Complete':
@@ -124,7 +124,7 @@ def get_workflow_status(customer_id):
             pending.append('Load Enhancement Status')
         if not kseb_data.fee_paid: pending.append('Fee Paid')
         if kseb_data.feasibility_status != 'Complete': pending.append('Feasibility Status')
-        result['kseb'] = _module_result('KSEB Utility', len(pending) == 0, pending)
+        result['kseb'] = _module_result('KSEB Feasibility', len(pending) == 0, pending)
 
     # ---------------- KSEB Registration & Completion ----------------
     reg = KsebRegistrationCompletion.query.filter_by(customer_project_id=customer.id).first()
@@ -163,16 +163,16 @@ def get_workflow_status(customer_id):
         if len(_load_json_list(delivery.delivery_images)) == 0: pending.append('Delivery Images')
         result['material_delivery'] = _module_result('Material Delivery', len(pending) == 0, pending)
 
-    # ---------------- Installation Progress (Material Installation) ----------------
+    # ---------------- Material Installation (Material Installation) ----------------
     installation = customer.material_installation_rel
     if not installation:
-        result['material_installation'] = _module_result('Installation Progress', False, ['Not started'])
+        result['material_installation'] = _module_result('Material Installation', False, ['Not started'])
     else:
         pending = []
         if not installation.electrical_installed: pending.append('Electrical Installed')
         if not installation.structure_installed: pending.append('Structure Installed')
         if len(_load_json_list(installation.installation_images)) == 0: pending.append('Installation Images')
-        result['material_installation'] = _module_result('Installation Progress', len(pending) == 0, pending)
+        result['material_installation'] = _module_result('Material Installation', len(pending) == 0, pending)
 
     # ---------------- MNRE Installation ----------------
     mnre_install = MNREInstallation.query.filter_by(customer_project_id=customer.id).first()

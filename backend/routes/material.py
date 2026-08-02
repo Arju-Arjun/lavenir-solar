@@ -7,6 +7,7 @@ import cloudinary.uploader
 import json
 from utils import (
     check_permission, 
+    permission_allows_for_user,
     delete_cloudinary_file,
     handle_blueprint_check_access,
     handle_blueprint_request_access,
@@ -58,6 +59,15 @@ def _parse_bool(value):
         return False
     return str(value).strip().lower() in ['true', '1', 'yes', 'on']
 
+# Only these two are valid categories for an individual material item. ("Both"
+# is a frontend-only filter option meaning "no category filter", never a
+# value stored on a row.)
+ALLOWED_ITEM_CATEGORIES = {'Electrical', 'Structural'}
+
+def _normalize_category(raw_value, fallback='Electrical'):
+    value = (raw_value or '').strip().capitalize()
+    return value if value in ALLOWED_ITEM_CATEGORIES else fallback
+
 @material_bp.route('/<string:customer_id>/', methods=['GET'])
 @jwt_required()
 def get_material_delivery(customer_id):
@@ -67,7 +77,7 @@ def get_material_delivery(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'view', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'view', MODULE_NAME):
         return jsonify({"error": "Unauthorized module access parameters."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -93,7 +103,7 @@ def create_material_delivery(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'update', MODULE_NAME):
         return jsonify({"error": "Unauthorized submission cleared."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -163,7 +173,6 @@ def create_material_delivery(customer_id):
     new_delivery.work_done = "Completed" if (new_delivery.electrical_delivered and new_delivery.structure_delivered and new_delivery.panel_delivered and len(image_urls) > 0) else "Pending"
     
     db.session.add(new_delivery)
-    db.session.commit()
 
     audit_log = CustomerAuditLog(
         customer_project_id=customer_project.id,
@@ -186,7 +195,7 @@ def update_material_delivery(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'update', MODULE_NAME):
         return jsonify({"error": "Unauthorized modification context."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -291,6 +300,22 @@ def update_material_delivery(customer_id):
         except (TypeError, ValueError):
             return jsonify({"error": "Invalid items payload format."}), 400
 
+        # Reject duplicate rows (same material name + category) before
+        # touching the database, so a bad submission never partially saves.
+        seen_keys = set()
+        for item in items_data:
+            name_key = (item.get('material_name') or '').strip().lower()
+            if not name_key:
+                continue
+            category_key = _normalize_category(item.get('category')).lower()
+            dup_key = (name_key, category_key)
+            if dup_key in seen_keys:
+                return jsonify({
+                    "error": f"Duplicate material item '{item.get('material_name')}' "
+                             f"({_normalize_category(item.get('category'))}) found in submitted items."
+                }), 400
+            seen_keys.add(dup_key)
+
         existing_items = {i.id: i for i in material_delivery.material_items}
         incoming_ids = {item.get('id') for item in items_data if item.get('id')}
 
@@ -312,6 +337,7 @@ def update_material_delivery(customer_id):
                 row.sl_no = item.get('sl_no', idx + 1)
                 row.material_name = item.get('material_name', row.material_name)
                 row.unit = item.get('unit', row.unit)
+                row.category = _normalize_category(item.get('category'), fallback=row.category or 'Electrical')
                 if quantity != row.quantity:
                     row.quantity = quantity
                     row.remaining_quantity = max(0.0, quantity - (row.used_quantity or 0.0))
@@ -322,6 +348,7 @@ def update_material_delivery(customer_id):
                     sl_no=item.get('sl_no', idx + 1),
                     material_name=item.get('material_name', ''),
                     unit=item.get('unit', 'Nos'),
+                    category=_normalize_category(item.get('category')),
                     quantity=quantity,
                     used_quantity=0.0,
                     remaining_quantity=quantity
@@ -335,8 +362,6 @@ def update_material_delivery(customer_id):
     
     material_delivery.work_done = "Completed" if (material_delivery.electrical_delivered and material_delivery.structure_delivered and material_delivery.panel_delivered and len(final_images) > 0) else "Pending"
 
-    db.session.commit()
-
     if changes:
         audit_log = CustomerAuditLog(
             customer_project_id=customer_project.id,
@@ -346,7 +371,8 @@ def update_material_delivery(customer_id):
             changes_payload=json.dumps(changes)
         )
         db.session.add(audit_log)
-        db.session.commit()
+
+    db.session.commit()
 
     message = "Delivery record created and items saved successfully." if created_new_delivery else "Delivery logs updated smoothly."
     return jsonify({"message": message, "delivery": _serialize_delivery(material_delivery)}), 200

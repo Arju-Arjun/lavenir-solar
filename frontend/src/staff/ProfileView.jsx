@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { FaEdit, FaCamera, FaSave, FaTimes, FaUser, FaPhone, FaEnvelope } from 'react-icons/fa';
 
-const ProfileView = () => {
+const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5MB - safely under Cloudinary's 10MB cap
+const MAX_IMAGE_DIMENSION = 800; // px, longest side after resize
+
+const ProfileView = ({ onProfileUpdated }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [compressing, setCompressing] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -66,11 +70,95 @@ const ProfileView = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleFileChange = (e) => {
+  // Resize/re-encode an image client-side so large camera photos don't get
+  // rejected by Cloudinary's upload size limit. Returns a new File object.
+  const compressImage = (file, maxDimension = MAX_IMAGE_DIMENSION, quality = 0.8) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        img.onload = () => {
+          let { width, height } = img;
+
+          if (width > height && width > maxDimension) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else if (height > maxDimension) {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error('Image compression failed'));
+                return;
+              }
+              const compressedFile = new File(
+                [blob],
+                file.name.replace(/\.[^/.]+$/, '') + '.jpg',
+                { type: 'image/jpeg' }
+              );
+              resolve(compressedFile);
+            },
+            'image/jpeg',
+            quality
+          );
+        };
+        img.onerror = () => reject(new Error('Failed to load image for compression'));
+        img.src = e.target.result;
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileChange = async (e) => {
     const file = e.target.files[0];
-    if (file) {
-      setSelectedFile(file);
-      setImagePreview(URL.createObjectURL(file));
+    if (!file) return;
+
+    setError('');
+
+    if (!file.type.startsWith('image/')) {
+      setError('Please choose an image file.');
+      e.target.value = '';
+      return;
+    }
+
+    setCompressing(true);
+    try {
+      let finalFile = file;
+
+      // Only compress if it's actually large - avoid unnecessary work on small files
+      if (file.size > MAX_UPLOAD_SIZE) {
+        finalFile = await compressImage(file);
+
+        // If it's still too big after compression (rare), reject it
+        if (finalFile.size > MAX_UPLOAD_SIZE) {
+          setError(
+            `Image is still too large after compression (${(finalFile.size / 1024 / 1024).toFixed(1)}MB). Please choose a smaller photo.`
+          );
+          e.target.value = '';
+          setCompressing(false);
+          return;
+        }
+      }
+
+      setSelectedFile(finalFile);
+      setImagePreview(URL.createObjectURL(finalFile));
+    } catch (err) {
+      console.error('Image processing error:', err);
+      setError('Failed to process the selected image. Please try a different file.');
+      e.target.value = '';
+    } finally {
+      setCompressing(false);
     }
   };
 
@@ -119,8 +207,14 @@ const ProfileView = () => {
         setProfile(resData.data);
         setIsEditing(false);
         setSelectedFile(null);
+        // setSuccessMessage('Profile updated successfully!');
         if (resData.data.profile_photo) {
           setImagePreview(resData.data.profile_photo);
+        }
+        // Let the parent (wherever `user` state lives, e.g. App.jsx) know,
+        // so Layout's sidebar picks up the new name/photo immediately.
+        if (onProfileUpdated) {
+          onProfileUpdated(resData.data);
         }
       } else {
         setError(resData.message || 'Failed to update profile records.');
@@ -169,6 +263,11 @@ const ProfileView = () => {
               style={{ display: 'none' }}
             />
           </div>
+          {compressing && (
+            <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
+              Processing image...
+            </p>
+          )}
         </div>
 
         <div className="pv-body">
@@ -257,18 +356,6 @@ const ProfileView = () => {
                 />
               </div>
 
-              <div className="pv-form-group full-width">
-                <label className="pv-form-label">Profile Photo</label>
-                <div className="pv-file-row">
-                  <label htmlFor="profile_photo_upload" className="pv-file-choose-btn">
-                    <FaCamera /> Choose Image
-                  </label>
-                  <span className="pv-file-name">
-                    {selectedFile ? selectedFile.name : 'No file chosen — click the camera icon on your photo, or here'}
-                  </span>
-                </div>
-              </div>
-
               <div className="pv-form-actions">
                 <button
                   type="button"
@@ -281,7 +368,7 @@ const ProfileView = () => {
                 <button
                   type="submit"
                   className="pv-btn-primary"
-                  disabled={saving}
+                  disabled={saving || compressing}
                 >
                   <FaSave /> {saving ? 'Saving...' : 'Save Changes'}
                 </button>

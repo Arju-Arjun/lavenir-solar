@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts';
 import {
-  Users, Zap, ChevronDown, MapPin, CalendarClock, Loader2, LayoutGrid, BarChart3,
+  Users, Zap, ChevronDown, Loader2, LayoutGrid, BarChart3, AlertTriangle,
 } from 'lucide-react';
 import { adminDashboardApi } from '../utils/dashboardApi';
 
@@ -76,14 +76,14 @@ function PendingMetricCard({ data }) {
   );
 }
 
-function ChartCard({ title, height = 300, headerRight, children }) {
+function ChartCard({ title, height = 300, headerRight, children, cardStyle, bodyStyle, titleStyle }) {
   return (
-    <div className="chart-card">
+    <div className="chart-card" style={cardStyle}>
       <div className="chart-card-header">
-        <h3 className="chart-card-title">{title}</h3>
+        <h3 className="chart-card-title" style={titleStyle}>{title}</h3>
         {headerRight}
       </div>
-      <div className="chart-card-body" style={{ height }}>
+      <div className="chart-card-body" style={{ height, ...bodyStyle }}>
         {children}
       </div>
     </div>
@@ -94,6 +94,103 @@ function ChartLoader() {
   return (
     <div className="chart-loading-state">
       <Loader2 className="spin-icon" size={22} />
+    </div>
+  );
+}
+
+function ListLoader() {
+  return (
+    <div className="chart-loading-state" style={{ minHeight: 120 }}>
+      <Loader2 className="spin-icon" size={20} />
+    </div>
+  );
+}
+
+function EmptyState({ message }) {
+  return (
+    <div
+      style={{
+        border: '1px dashed #cbd5e1',
+        borderRadius: '10px',
+        padding: '12px 14px',
+        background: '#fff',
+      }}
+    >
+      <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>{message}</p>
+    </div>
+  );
+}
+
+function KsebRegistrationAlertList({ alerts }) {
+  if (alerts === null) return null;
+  if (!alerts) return <ListLoader />;
+  if (alerts.length === 0) return <EmptyState message="No pending KSEB registrations right now." />;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+      {alerts.map((alert) => (
+        <div
+          key={alert.customer_id}
+          style={{
+            border: `1px solid ${alert.is_overdue ? '#fecaca' : '#e2e8f0'}`,
+            borderLeft: `3px solid ${alert.is_overdue ? '#ef4444' : '#3b82f6'}`,
+            borderRadius: '10px',
+            padding: '10px 12px',
+            background: alert.is_overdue ? '#fef2f2' : '#f8fafc',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>{alert.customer_name}</span>
+            {alert.is_overdue && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 7px', borderRadius: '999px', backgroundColor: '#fee2e2', color: '#dc2626', fontSize: '0.68rem', fontWeight: 700 }}>
+                <AlertTriangle size={14} /> Overdue
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', fontSize: '0.74rem', color: '#64748b' }}>
+            <span>Feasibility: {alert.feasibility_date}</span>
+            <span>Deadline: {alert.deadline_date}</span>
+            <span>{alert.is_overdue ? `${Math.abs(alert.days_left)} days overdue` : `${alert.days_left} days left`}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ServiceDueAlertList({ alerts }) {
+  if (alerts === null) return null;
+  if (!alerts) return <ListLoader />;
+  if (alerts.length === 0) return <EmptyState message="No upcoming service due dates right now." />;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+      {alerts.map((alert) => (
+        <div
+          key={alert.customer_id}
+          style={{
+            border: `1px solid ${alert.is_overdue ? '#fecaca' : '#e2e8f0'}`,
+            borderLeft: `3px solid ${alert.is_overdue ? '#ef4444' : '#3b82f6'}`,
+            borderRadius: '10px',
+            padding: '10px 12px',
+            background: alert.is_overdue ? '#fef2f2' : '#f8fafc',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>{alert.customer_name}</span>
+            {alert.is_overdue && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 7px', borderRadius: '999px', backgroundColor: '#fee2e2', color: '#dc2626', fontSize: '0.68rem', fontWeight: 700 }}>
+                <AlertTriangle size={14} /> Overdue
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', fontSize: '0.74rem', color: '#64748b' }}>
+            <span>Service # {alert.maintenance_service_count + 1}</span>
+            <span>Due: {alert.due_date}</span>
+            <span>{alert.is_overdue ? `${Math.abs(alert.days_left)} days overdue` : `${alert.days_left} days left`}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -229,7 +326,7 @@ function GrowthChart({ mode, data, visibleLines }) {
 }
 
 function AdminOverviewTab({
-  capacity, pending, upcomingServices,
+  capacity, pending, alerts,
   monthlyTrend, yearlySummary,
   mode, onModeChange,
   selectedYear, onYearChange,
@@ -249,7 +346,7 @@ function AdminOverviewTab({
         <MetricCard
           icon={Zap}
           accentClass="accent-gold"
-          label="Total Capacity Installed"
+          label="Total System Capacity Installed"
           value={capacity ? `${capacity.total_capacity_kw.toLocaleString()} kW` : '--'}
           sub={capacity ? `${capacity.project_count} projects · avg ${capacity.average_capacity_kw} kW` : undefined}
         />
@@ -276,15 +373,25 @@ function AdminOverviewTab({
         <GrowthLegendList visibleLines={visibleLines} onToggle={onToggleLine} />
       </ChartCard>
 
-      <div className="placeholder-card">
-        <div className="placeholder-card-header">
-          <CalendarClock size={18} />
-          <h3>Upcoming Service Due Dates</h3>
-        </div>
-        <p>
-          {upcomingServices?.message ||
-            'This section will list customers whose next service is due soon, once service scheduling is added.'}
-        </p>
+      <div className="chart-card-grid">
+        <ChartCard
+          title="KSEB Registration Due"
+          height={260}
+          cardStyle={{ padding: '14px 16px', marginBottom: 0 }}
+          bodyStyle={{ height: 220, minHeight: 220 }}
+          titleStyle={{ marginBottom: 10 }}
+        >
+          <KsebRegistrationAlertList alerts={alerts?.kseb_registration_alerts} />
+        </ChartCard>
+        <ChartCard
+          title="Service Due Date"
+          height={260}
+          cardStyle={{ padding: '14px 16px', marginBottom: 0 }}
+          bodyStyle={{ height: 220, minHeight: 220 }}
+          titleStyle={{ marginBottom: 10 }}
+        >
+          <ServiceDueAlertList alerts={alerts?.service_due_alerts} />
+        </ChartCard>
       </div>
     </>
   );
@@ -346,7 +453,7 @@ function AdminDashboard({ user, role, onLogout, currentPath, navigateTo, childre
   const [pending, setPending] = useState(null);
   const [status, setStatus] = useState(null);
   const [districts, setDistricts] = useState(null);
-  const [upcomingServices, setUpcomingServices] = useState(null);
+  const [alerts, setAlerts] = useState(null);
   const [error, setError] = useState(null);
 
   // Growth chart state: Month vs Year(Total) mode, which year is selected
@@ -393,7 +500,7 @@ function AdminDashboard({ user, role, onLogout, currentPath, navigateTo, childre
       adminDashboardApi.pendingSummary().then(setPending),
       adminDashboardApi.projectStatus().then(setStatus),
       adminDashboardApi.districtDistribution().then(setDistricts),
-      adminDashboardApi.upcomingServices().then(setUpcomingServices),
+      adminDashboardApi.alerts().then(setAlerts),
       adminDashboardApi.yearlySummary().then(setYearlySummary),
     ]).catch((e) => setError(e.message));
 
@@ -441,7 +548,7 @@ function AdminDashboard({ user, role, onLogout, currentPath, navigateTo, childre
             <AdminOverviewTab
               capacity={capacity}
               pending={pending}
-              upcomingServices={upcomingServices}
+              alerts={alerts}
               monthlyTrend={monthlyTrend}
               yearlySummary={yearlySummary}
               mode={growthMode}

@@ -1,10 +1,10 @@
 export function timeAgo(dateString) {
-  // If the string doesn't have timezone info, treat it as UTC
+  // Treat timezone-less strings as UTC
   const utcString = dateString.endsWith('Z') ? dateString : dateString + 'Z';
   const date = new Date(utcString);
   const seconds = Math.floor((new Date() - date) / 1000);
 
-  if (seconds < 60) return 'Just now';
+  if (seconds < 60) return 'Just now'; // also covers clock skew / future timestamps
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} min${minutes > 1 ? 's' : ''} ago`;
   const hours = Math.floor(minutes / 60);

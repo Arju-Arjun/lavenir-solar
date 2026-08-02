@@ -23,6 +23,7 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pendingPermissionCount, setPendingPermissionCount] = useState(0);
 
   const sidebarRef = useRef(null);
   const hamburgerRef = useRef(null);
@@ -48,6 +49,23 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
       console.error('Failed to fetch notifications:', err);
     } finally {
       if (append) setLoadingMore(false);
+    }
+  };
+
+  // ---- Fetch count of pending staff permission requests (admin-only sidebar badge) ----
+  const fetchPendingPermissionCount = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || role !== 'admin') return;
+    try {
+      const res = await fetch(`${API_BASE}/staff/permissions/requests/all`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingPermissionCount((data.pending || []).length);
+      }
+    } catch (err) {
+      console.error('Failed to fetch pending permission request count:', err);
     }
   };
 
@@ -95,6 +113,13 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
     const interval = setInterval(() => fetchNotifications(1, false), 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Fetch pending permission request count on mount + poll every 30s (admin only)
+  useEffect(() => {
+    fetchPendingPermissionCount();
+    const interval = setInterval(fetchPendingPermissionCount, 30000);
+    return () => clearInterval(interval);
+  }, [role]);
 
   // Subscribe to push notifications once
   useEffect(() => {
@@ -216,7 +241,7 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
       {/* SLIDING SIDEBAR NAVIGATION BASED ON CLEARANCE */}
       <aside ref={sidebarRef} className={`sliding-sidebar-menu ${isSidebarOpen ? 'expanded' : 'collapsed'}`}>
         <div className="sidebar-user-profile-summary">
-          <div className="profile-fallback-avatar">👤</div>
+          <div className="profile-fallback-avatar">{user?.profile_photo ? <img src={user.profile_photo} alt="User Avatar" /> : '👤'}</div>
           <div className="sidebar-profile-info">
             <p className="profile-display-name">{user?.full_name || 'User Profile'}</p>
             <p className="profile-display-role-badge">{role?.toUpperCase()}</p>
@@ -230,7 +255,15 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
               <button className={`nav-node-item ${currentPath === '/documents' ? 'active' : ''}`} onClick={() => navigateTo('/documents')}>Documents</button>
               <button className={`nav-node-item ${currentPath === '/workflow-details' ? 'active' : ''}`} onClick={() => navigateTo('/workflow-details')}>Workflow Details</button>
               <button className={`nav-node-item ${currentPath === '/supplements' ? 'active' : ''}`} onClick={() => navigateTo('/supplements')}>Supplement Documents</button>
-              <button className={`nav-node-item ${currentPath === '/settings' ? 'active' : ''}`} onClick={() => navigateTo('/settings')}>Settings</button>
+              <button className={`nav-node-item ${currentPath === '/complaints' ? 'active' : ''}`} onClick={() => navigateTo('/complaints')}>Complaints</button>
+              <button className={`nav-node-item ${currentPath === '/settings' ? 'active' : ''}`} onClick={() => navigateTo('/settings')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Settings</span>
+                {pendingPermissionCount > 0 && (
+                  <span className="pending-count-badge">
+                    {pendingPermissionCount}
+                  </span>
+                )}
+              </button>
               <button className={`nav-node-item ${currentPath === '/profile' ? 'active' : ''}`} onClick={() => navigateTo('/profile')}>Profile</button>
             </>
           ) : (
@@ -240,6 +273,7 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
               <button className={`nav-node-item ${currentPath === '/documents' ? 'active' : ''}`} onClick={() => navigateTo('/documents')}>Documents</button>
               <button className={`nav-node-item ${currentPath === '/supplements' ? 'active' : ''}`} onClick={() => navigateTo('/supplements')}>Supplement Documents</button>
               <button className={`nav-node-item ${currentPath === '/workflow-details' ? 'active' : ''}`} onClick={() => navigateTo('/workflow-details')}>Workflow Details</button>
+              <button className={`nav-node-item ${currentPath === '/complaints' ? 'active' : ''}`} onClick={() => navigateTo('/complaints')}>Complaints</button>
               <button className={`nav-node-item ${currentPath === '/profile' ? 'active' : ''}`} onClick={() => navigateTo('/profile')}>Profile</button>
             </>
           )}

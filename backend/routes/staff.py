@@ -151,21 +151,67 @@ def update_staff(user_id):
         return jsonify({"error": "An error occurred while running data transformations.", "details": str(e)}), 500
     
 
+def _scrub_user_foreign_keys(user_id):
+    """
+    Every table that references users.id (created_by, updated_by,
+    user_id, ...) needs to be dealt with before a User row can actually
+    be deleted, or Postgres raises a ForeignKeyViolation the moment this
+    staff member has touched any site visit, audit log, notification,
+    permission, etc.
+
+    Rather than hand-listing every table here (and having to remember to
+    update this again every time a new created_by/updated_by column gets
+    added somewhere else in the app), this walks the real schema
+    metadata for any FK pointing at users.id:
+
+      - nullable columns (SiteVisit.created_by, CustomerAuditLog.user_id,
+        Notification.user_id, PushSubscription.user_id, ...) get set to
+        NULL so the record survives without the user link. to_dict()
+        methods on these already tolerate a missing user.
+      - non-nullable columns (PermissionRequest.user_id,
+        UserPermission.user_id) can't be nulled out, so those rows are
+        deleted along with the user - they don't mean anything without
+        the staff member they belong to.
+    """
+    for table in db.metadata.tables.values():
+        if table.name == 'users':
+            continue
+        for column in table.columns:
+            for fk in column.foreign_keys:
+                if fk.column.table.name == 'users' and fk.column.name == 'id':
+                    if column.nullable:
+                        db.session.execute(
+                            table.update()
+                            .where(column == user_id)
+                            .values({column.name: None})
+                        )
+                    else:
+                        db.session.execute(
+                            table.delete().where(column == user_id)
+                        )
+
+
 # ==========================================
-# ❌ SAFE DELETE: SUSPEND OR RESET KEY REFERENCES
+# ❌ PERMANENT DELETE
 # ==========================================
 @staff_bp.route('/delete/<int:user_id>', methods=['DELETE'])
 def delete_staff(user_id):
     staff_member = User.query.filter_by(id=user_id, role='staff').first()
-    
+
     if not staff_member:
         return jsonify({"error": "Staff member profile not found."}), 404
 
     try:
-        # Soft delete execution maps status to 'Inactive' to satisfy DB foreign key relationships cleanly
-        staff_member.status = 'Inactive'
+        staff_name = staff_member.full_name
+
+        # Clear/collapse every foreign key pointing at this user first,
+        # otherwise the delete below fails on the first table with a
+        # NOT NULL or unresolved FK constraint against users.id.
+        _scrub_user_foreign_keys(user_id)
+
+        db.session.delete(staff_member)
         db.session.commit()
-        return jsonify({"message": f"Staff member '{staff_member.full_name}' has been successfully deactivated."}), 200
+        return jsonify({"message": f"Staff member '{staff_name}' has been permanently deleted."}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": "An error occurred while attempting to delete the staff member.", "details": str(e)}), 500

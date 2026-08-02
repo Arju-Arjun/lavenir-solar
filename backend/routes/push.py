@@ -7,9 +7,9 @@ from models import db, PushSubscription, Notification
 
 push_bp = Blueprint('push', __name__)
 
-VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', 'BDKPUxbcUpXjyoZ7kaXFvfK8ZNuaipR1SnBE15Yr0320VQ0RuAhbhwcsWsgIL4yOZHCmxRn1p6E0p-r7zr8_fL4')
-VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY', 'DL_0FYo8nSAVQ5PV7RxVQ4Ds-Qdr2hPCSWsI7IMlFJg')
-VAPID_CLAIMS = {"sub": os.getenv('VAPID_CLAIM_EMAIL', 'mailto:arjun.ai.tinos@gmail.com')}
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY')
+VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY')
+VAPID_CLAIMS = {"sub": os.getenv('VAPID_CLAIM_EMAIL')}
 
 
 @push_bp.route('/vapid-public-key', methods=['GET'])
@@ -21,22 +21,24 @@ def get_public_key():
 @jwt_required()
 def subscribe():
     user_id = int(get_jwt_identity())
-    data = request.json
+    data = request.json or {}
     endpoint = data.get('endpoint')
     keys = data.get('keys', {})
+    p256dh = keys.get('p256dh')
+    auth = keys.get('auth')
+
+    if not endpoint or not p256dh or not auth:
+        return jsonify({"success": False, "message": "endpoint and keys.p256dh/auth are required"}), 400
 
     existing = PushSubscription.query.filter_by(endpoint=endpoint).first()
     if existing:
         existing.user_id = user_id
+        existing.p256dh = p256dh
+        existing.auth = auth
         db.session.commit()
         return jsonify({"success": True, "message": "Subscription updated"})
 
-    sub = PushSubscription(
-        user_id=user_id,
-        endpoint=endpoint,
-        p256dh=keys.get('p256dh'),
-        auth=keys.get('auth')
-    )
+    sub = PushSubscription(user_id=user_id, endpoint=endpoint, p256dh=p256dh, auth=auth)
     db.session.add(sub)
     db.session.commit()
     return jsonify({"success": True})
@@ -45,8 +47,13 @@ def subscribe():
 @push_bp.route('/unsubscribe', methods=['POST'])
 @jwt_required()
 def unsubscribe():
-    endpoint = request.json.get('endpoint')
-    sub = PushSubscription.query.filter_by(endpoint=endpoint).first()
+    user_id = int(get_jwt_identity())
+    endpoint = (request.json or {}).get('endpoint')
+    if not endpoint:
+        return jsonify({"success": False, "message": "endpoint is required"}), 400
+
+    # Only allow a user to delete their own subscription, not anyone's endpoint
+    sub = PushSubscription.query.filter_by(endpoint=endpoint, user_id=user_id).first()
     if sub:
         db.session.delete(sub)
         db.session.commit()
@@ -80,13 +87,12 @@ def send_push_to_subscriptions(subscriptions, title, body, url='/'):
 def create_notification_and_push(title, body, url='/', notif_type='general', user_id=None, customer_project_id=None):
     """
     Plain, jwt/request-free version of the notification+push logic.
-    Callable from anywhere in the backend — background scheduler jobs
-    (notification_rules.py) or other route handlers (e.g. service.py after
-    a service log is created) — not just from an authenticated HTTP request.
+    Callable from background jobs (notification_rules.py) or other route
+    handlers (e.g. service.py after a service log is created).
 
-    1. Always saves a Notification row (so it shows in the bell dropdown,
-       even if the user has no active push subscription / denied permission).
-    2. Attempts an actual browser/mobile push on top of that, best-effort.
+    Always saves a Notification row (so it shows in the bell dropdown even
+    if the user has no active push subscription), then attempts an actual
+    push on top of that, best-effort.
     """
     notif = Notification(
         user_id=user_id,
@@ -111,7 +117,7 @@ def create_notification_and_push(title, body, url='/', notif_type='general', use
 @push_bp.route('/send', methods=['POST'])
 @jwt_required()
 def send_notification():
-    data = request.json
+    data = request.json or {}
     result = create_notification_and_push(
         title=data.get('title', 'Notification'),
         body=data.get('body', ''),

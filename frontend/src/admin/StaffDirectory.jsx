@@ -276,7 +276,7 @@ const StaffDirectory = () => {
                         {isEditingRow ? <input type="text" name="department" className="form-field-input" value={editFormData.department} onChange={handleEditChange} /> : (member.department || '—')}
                       </td>
                       <td>
-                        {isEditingRow ? <input type="email" name="email" className="form-field-input" value={editFormData.email} onChange={handleEditChange} /> : member.email}
+                        {member.email}
                       </td>
                       <td>
                         {isEditingRow ? (
@@ -286,16 +286,17 @@ const StaffDirectory = () => {
                                 name="phone_number" 
                                 className="form-field-input" 
                                 value={editFormData.phone_number} 
-                                onChange={handleEditChange} 
+                                onChange={handleEditChange}
+                                minLength="10"
+                                maxLength="10"
+                                pattern="[0-9]{10}"
+                                title="Phone number must be exactly 10 digits" 
                             />
                             </div>
                         ) : (
-                            member.phone_number ? (
-                            // Checks if the number already has the country code prefix to avoid duplicates
-                            member.phone_number.startsWith('+91') 
-                                ? member.phone_number 
-                                : `+91 ${member.phone_number}`
-                            ) : '—'
+                            // add condition and prefix
+                            member.phone_number ? `+91 ${member.phone_number}` : '—'
+                            
                         )}
                         </td>
                       {/* <td>

@@ -213,10 +213,21 @@ const PaymentFlow = ({ customerId }) => {
     return projectCost - calculateTotalReceived();
   };
 
+  const ordinalSuffix = (n) => {
+    const rem100 = n % 100;
+    if (rem100 >= 11 && rem100 <= 13) return "th";
+    switch (n % 10) {
+      case 1: return "st";
+      case 2: return "nd";
+      case 3: return "rd";
+      default: return "th";
+    }
+  };
+
   const handleAddAdditionalPayment = () => {
     if (!canUpdate) return;
     const nextIdx = additionalPayments.length + 3;
-    setAdditionalPayments([...additionalPayments, { label: `${nextIdx}rd Payment`, amount: "", date: "" }]);
+    setAdditionalPayments([...additionalPayments, { label: `${nextIdx}${ordinalSuffix(nextIdx)} Payment`, amount: "", date: "" }]);
   };
 
   const handleUpdateAdditionalField = (index, field, value) => {
@@ -231,7 +242,7 @@ const PaymentFlow = ({ customerId }) => {
     const filtered = additionalPayments.filter((_, i) => i !== index);
     const updatedLabels = filtered.map((p, i) => ({
       ...p,
-      label: `${i + 3}th Payment`
+      label: `${i + 3}${ordinalSuffix(i + 3)} Payment`
     }));
     setAdditionalPayments(updatedLabels);
   };

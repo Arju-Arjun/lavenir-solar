@@ -4,6 +4,8 @@ from models import db, Notification
 
 notifications_bp = Blueprint('notifications', __name__)
 
+MAX_PER_PAGE = 100
+
 
 @notifications_bp.route('', methods=['GET'])
 @jwt_required()
@@ -13,6 +15,8 @@ def get_notifications():
     # Pagination params
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 15, type=int)
+    page = max(page, 1)
+    per_page = min(max(per_page, 1), MAX_PER_PAGE)  # CHANGED: was unbounded - a client (or bug) could pass per_page=100000 and force a huge query
 
     base_query = Notification.query.filter(
         (Notification.user_id == user_id) | (Notification.user_id.is_(None))
@@ -40,7 +44,17 @@ def get_notifications():
 @notifications_bp.route('/<int:notif_id>/read', methods=['PUT'])
 @jwt_required()
 def mark_read(notif_id):
+    user_id = int(get_jwt_identity())
     notif = Notification.query.get_or_404(notif_id)
+
+    # CHANGED: previously any authenticated user could mark ANY notification
+    # (including ones addressed to a different specific user_id) as read just
+    # by guessing/incrementing the id - get_or_404 alone checks existence,
+    # not ownership. Broadcast rows (user_id is None) stay markable by anyone
+    # they're visible to, same as get_notifications' own filter above.
+    if notif.user_id is not None and notif.user_id != user_id:
+        return jsonify({"error": "Not authorized to modify this notification"}), 403
+
     notif.is_read = True
     db.session.commit()
     return jsonify({"success": True})
@@ -50,8 +64,9 @@ def mark_read(notif_id):
 @jwt_required()
 def mark_all_read():
     user_id = int(get_jwt_identity())
-    Notification.query.filter(
-        (Notification.user_id == user_id) | (Notification.user_id.is_(None))
+    updated = Notification.query.filter(
+        (Notification.user_id == user_id) | (Notification.user_id.is_(None)),
+        Notification.is_read == False  # CHANGED: skip rows already read instead of rewriting every row every time
     ).update({"is_read": True}, synchronize_session=False)
     db.session.commit()
-    return jsonify({"success": True})
+    return jsonify({"success": True, "updated": updated})

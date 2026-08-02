@@ -18,13 +18,13 @@ const PermissionManagement = () => {
     { key: 'Payment Flow', label: 'PAYMENT FLOW' },
     { key: 'Bank Loan', label: 'BANK LOAN' },
     { key: 'MNRE Profile', label: 'MNRE PROFILE' },
-    { key: 'KSEB Utility', label: 'KSEB FEASIBILITY' },
+    { key: 'KSEB Feasibility', label: 'KSEB FEASIBILITY' },
     { key: 'Material Delivery', label: 'MATERIAL DELIVERY' },
-    { key: 'Installation Progress', label: 'MATERIAL INSTALLATION' },
+    { key: 'Material Installation', label: 'MATERIAL INSTALLATION' },
     { key: 'KSEB Registration & Completion', label: 'KSEB REGISTRATION' },
     { key: 'DCR Details', label: 'DCR DETAILS' },
     { key: 'MNRE Installation', label: 'MNRE INSTALLATION' },
-    { key: 'Service', label: 'SERVICE / MAINTENANCE' }
+    { key: 'Service', label: 'Service' }
   ];
 
   useEffect(() => {
@@ -107,16 +107,26 @@ const PermissionManagement = () => {
 
   const handleCheckboxChange = (moduleKey, tierKey) => {
     setPermissionsMatrix(prev => {
-      const updatedModule = { ...prev[moduleKey] };
+      const currentModule = prev[moduleKey] || { view: true, update: false, delete: false };
+      const updatedModule = { ...currentModule };
       updatedModule[tierKey] = !updatedModule[tierKey];
 
-      if ((updatedModule.update || updatedModule.delete) && tierKey !== 'view') {
-        updatedModule.view = true;
-      }
-      
-      if (tierKey === 'view' && !updatedModule.view) {
-        updatedModule.update = false;
-        updatedModule.delete = false;
+      if (tierKey === 'view') {
+        if (!updatedModule.view) {
+          updatedModule.update = false;
+          updatedModule.delete = false;
+        }
+      } else if (tierKey === 'update') {
+        if (updatedModule.update) {
+          updatedModule.view = true;
+        } else {
+          updatedModule.delete = false;
+        }
+      } else if (tierKey === 'delete') {
+        if (updatedModule.delete) {
+          updatedModule.update = true;
+          updatedModule.view = true;
+        }
       }
 
       return { ...prev, [moduleKey]: updatedModule };
@@ -298,8 +308,14 @@ const PermissionManagement = () => {
 
                             <label className="interactive-checkbox-label">
                               <div className="permission-checkbox-wrapper">
-                                {/* customer profile only showing delete option */}
-                                {mod.key === 'Customer Profile' || mod.key === 'Service' && (
+                                {/* Delete tier is only offered for these two modules.
+                                    Fixed: previously `A || B && (...)` evaluated to the
+                                    boolean `true` for Customer Profile (since || binds
+                                    looser than &&), and React silently drops a bare
+                                    `true` child — so the checkbox never rendered for
+                                    Customer Profile, only for Service. Parenthesized
+                                    the whole condition so both modules render it. */}
+                                {(mod.key === 'Customer Profile' || mod.key === 'Service') && (
                                 <input 
                                   type="checkbox" 
                                   checked={currentRights.delete} 

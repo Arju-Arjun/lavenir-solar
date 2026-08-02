@@ -473,7 +473,7 @@ const BankLoanView = ({ customerId }) => {
                         <span className="node-label font-bold outstanding-due-title">Due Amount: </span>
                         <span
                           className="node-value font-bold outstanding-due-value"
-                          style={{ color: (parseFloat(loanData.due_amount) || 0) >= 0 ? "#e00a0a" : "#047857" }}
+                          style={{ color: (parseFloat(loanData.due_amount) || 0) > 0 ? "#e00a0a" : "#047857" }}
                         >
                           &nbsp;₹{(parseFloat(loanData.due_amount) || 0).toLocaleString("en-IN")}
                         </span>

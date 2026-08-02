@@ -374,7 +374,23 @@ const MNREInstallation = ({ customerId }) => {
 
           <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px" }}>
             {canUpdate && <button type="submit" className="btn-action-edit">Save Changes</button>}
-            <button type="button" className="btn-action-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
+            <button type="button" className="btn-action-cancel" onClick={() => {
+              setIsEditing(false);
+              if (installationData) {
+                setFormData({
+                  installation_status: installationData.installation_status || "Pending",
+                  installation_date: installationData.installation_date ? installationData.installation_date.substring(0, 10) : "",
+                  comments: installationData.comments || "",
+                  approval_status: installationData.approval_status || "Pending",
+                  approval_date: installationData.approval_date ? installationData.approval_date.substring(0, 10) : "",
+                  subsidy_status: installationData.subsidy_status || "Pending",
+                  subsidy_amount: installationData.subsidy_amount || 0.0,
+                  subsidy_received_date: installationData.subsidy_received_date ? installationData.subsidy_received_date.substring(0, 10) : ""
+                });
+              } else {
+                setFormData(defaultFormState);
+              }
+            }}>Cancel</button>
           </div>
         </form>
       )}

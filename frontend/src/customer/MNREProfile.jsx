@@ -402,7 +402,14 @@ const MNREProfileView = ({ customerId }) => {
 
           <div className="workspace-action-trigger-row center-aligned-row mnre-margin-top-lg">
             {canUpdate && <button type="submit" className="btn-action-edit">Save Changes</button>}
-            <button type="button" className="btn-action-cancel" onClick={() => setIsEditing(false)}>Cancel</button>
+            <button type="button" className="btn-action-cancel" onClick={() => {
+              setIsEditing(false);
+              setDocumentFiles({});
+              setFormData({
+                mnre_status: mnreData?.mnre_status || "Pending",
+                comments: mnreData?.comments || ""
+              });
+            }}>Cancel</button>
           </div>
         </form>
       )}

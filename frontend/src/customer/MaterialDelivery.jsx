@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { FaLock, FaEdit, FaBoxOpen, FaTruck } from "react-icons/fa";
+import { FaLock, FaEdit, FaBoxOpen, FaTruck, FaPaperPlane } from "react-icons/fa";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useAuth } from "../context/AuthContext";
 
@@ -333,6 +333,20 @@ const MaterialDelivery = ({ customerId }) => {
           <span>Loading...</span>
         </div>
       )}
+
+      <div className="site-details-deck">
+        <div style={{ display: "flex", gap: "10px", marginLeft: "auto" }}>
+          {deliveryData && !canUpdate && (
+            pendingRequests["update"] === "Pending" ? (
+              <span style={{ fontSize: "0.8rem", color: "#ca8a04", fontWeight: "600" }}>⚠️ Update Request Pending</span>
+            ) : (
+              <button type="button" onClick={() => handleRequestAccessSubmit("update")} disabled={requestLoading} style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", padding: "4px 8px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", color: "#475569" }}>
+                <FaPaperPlane size={10} /> Request Update Authorization
+              </button>
+            )
+          )}
+        </div>
+      </div>
 
       {/* Navigation Matrix Headers */}
       <div className="workspace-tab-row">

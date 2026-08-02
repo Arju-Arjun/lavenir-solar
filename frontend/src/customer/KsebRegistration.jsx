@@ -155,17 +155,24 @@ export default function KsebRegistration({ customerId }) {
     wifi_configured: 'wifi_configured_date',
   };
 
-  const handleInputChange = (e) => {
-    if (!canUpdate) return;
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => {
-      const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
-      if (type === 'checkbox' && !checked && dateFieldByCheckbox[name]) {
-        next[dateFieldByCheckbox[name]] = '';
-      }
-      return next;
-    });
-  };
+    const handleInputChange = (e) => {
+        if (!canUpdate) return;
+        const { name, value, type, checked } = e.target;
+        setFormData(prev => {
+          const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
+          if (type === 'checkbox' && !checked && dateFieldByCheckbox[name]) {
+            next[dateFieldByCheckbox[name]] = '';
+          }
+          
+        
+          if (name === 'registration_submitted' && !checked) {
+            next.payment_done = false;
+            next.payment_date = '';
+          }
+          
+          return next;
+        });
+      };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -432,17 +439,25 @@ export default function KsebRegistration({ customerId }) {
             {/* Payment Done & Date */}
             <div className="checkbox-date-row-group">
               <div className="form-group-element">
-                <label className="kseb-checkbox-custom-label">
+                <label 
+                  className="kseb-checkbox-custom-label"
+                  style={!formData.registration_submitted ? { color: "#9ca3af", cursor: "not-allowed" } : {}}
+                >
                   <input 
                     type="checkbox" 
                     name="payment_done" 
                     checked={formData.payment_done} 
                     onChange={handleInputChange} 
-                    disabled={!canUpdate} 
+                    disabled={!canUpdate || !formData.registration_submitted} 
                     className="kseb-custom-checkbox" 
                   />
                   <span className="kseb-label-text">Payment Done</span>
                 </label>
+                {!formData.registration_submitted && (
+                  <span style={{ fontSize: "0.75rem", color: "#9ca3af", marginTop: "4px", display: "block" }}>
+                    Complete registration to enable payment
+                  </span>
+                )}
               </div>
               {formData.payment_done && (
                 <div className="form-group-element">

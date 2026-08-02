@@ -1,4 +1,4 @@
-  import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
   // add map location icon
   import { FaLock, FaCloudUploadAlt, FaEye, FaMapMarkerAlt, FaFilePdf, FaTrashAlt, FaEdit, FaPaperPlane, } from "react-icons/fa";
   import { FaLocationCrosshairs } from "react-icons/fa6";
@@ -509,7 +509,7 @@
                 <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px", gap: "12px" }}>
                   {canUpdate && (
                     <button type="button" className="btn-action-edit" onClick={() => setSiteEdit(true)}>
-                      <FaEdit style={{ marginRight: "6px" }} /> {visitData?.id ? "Edit Details" : "Add Site Visit Details"}
+                      <FaEdit style={{ marginRight: "6px" }} /> Edit Details
                     </button>
                   )}
                 </div>
@@ -686,7 +686,7 @@
 
             <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px" }}>
               {canUpdate && <button type="submit" className="btn-action-edit">Save Changes</button>}
-              <button type="button" className="btn-action-cancel" onClick={() => { setSiteEdit(false); setSelectedPhotos([]); photoPreviews.forEach((url) => URL.revokeObjectURL(url)); setPhotoPreviews([]); setRemovedPhotos([]); setDocumentFiles({}); setExistingPhotos(visitData?.images || []); if(visitData) { setFormData({ panel_capacity: String(visitData.panel_capacity), system_capacity: String(visitData.system_capacity), feasibility: visitData.feasibility || "Yes", project_cost: String(visitData.project_cost), location: visitData.location || "", comments: visitData.comments || "", ownership_change: visitData.ownership_change || "No", load_enhancement: visitData.load_enhancement || "No", wifi: visitData.wifi || "No" }); } else { resetFormDataState(); } }}>Cancel</button>
+              <button type="button" className="btn-action-cancel" onClick={() => { setSiteEdit(false); setSelectedPhotos([]); photoPreviews.forEach((url) => URL.revokeObjectURL(url)); setPhotoPreviews([]); setRemovedPhotos([]); setDocumentFiles({}); setExistingPhotos(visitData?.images || []); if(visitData) { setFormData({ panel_capacity: String(visitData.panel_capacity), system_capacity: String(visitData.system_capacity), feasibility: visitData.feasibility || "Yes", project_cost: String(visitData.project_cost), location: visitData.location || "", comments: visitData.comments || "", ownership_change: visitData.ownership_change || "No", load_enhancement: visitData.load_enhancement || "No", wifi: visitData.wifi || "No", changes: visitData.changes || "" }); } else { resetFormDataState(); } }}>Cancel</button>
             </div>
           </form>
         )}

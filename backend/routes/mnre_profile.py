@@ -79,75 +79,86 @@ def save_mnre_profile(customer_id):
     folder_path = get_module_folder_path(cust.customer_name, cust.customer_id, FOLDER_MODULE_NAME)
 
     site_visit = SiteVisit.query.filter_by(customer_project_id=cust.id).first()
-    if site_visit and site_visit.feasibility == "No":
-        return jsonify({"error": "Modifications blocked: Structural baseline feasibility is marked as 'No'."}), 403
 
     profile = MNREProfile.query.filter_by(customer_project_id=cust.id).first()
     action = "UPDATE" if profile else "CREATE"
-    
+
+    # Permission check runs ahead of the feasibility-block check so a user
+    # with no update permission on MNRE Profile never learns the
+    # customer's site-visit feasibility status before being told they
+    # lack access — permission gates everything else, not the other way
+    # around.
     if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
         return jsonify({"error": "Administrative block: Security matrix context lacks required write clearance parameters."}), 403
 
-    if not profile:
-        profile = MNREProfile(customer_project_id=cust.id, created_by=uid)
-        db.session.add(profile)
+    if site_visit and site_visit.feasibility == "No":
+        return jsonify({"error": "Modifications blocked: Structural baseline feasibility is marked as 'No'."}), 403
 
-    changes = {}
+    try:
+        if not profile:
+            profile = MNREProfile(customer_project_id=cust.id, created_by=uid)
+            db.session.add(profile)
 
-    if 'mnre_application_number' in request.form:
-        old_num = profile.mnre_application_number
-        profile.mnre_application_number = request.form.get('mnre_application_number')
-        if old_num != profile.mnre_application_number:
-            changes['mnre_application_number'] = {"old": old_num, "new": profile.mnre_application_number}
+        changes = {}
+
+        # REMOVED: 'mnre_application_number' and 'registered_beneficiary_name'
+        # handling used to be here. Neither is an actual column on the
+        # MNREProfile model (models.py), so setting them was a no-op that
+        # silently never persisted to the DB. Removed rather than adding the
+        # columns, per decision to keep this model as-is.
+
+        if 'mnre_status' in request.form:
+            old_status = profile.mnre_status
+            profile.mnre_status = request.form.get('mnre_status')
+            if old_status != profile.mnre_status:
+                changes['mnre_status'] = {"old": old_status, "new": profile.mnre_status}
+                
+        if 'comments' in request.form:
+            old_comments = profile.comments
+            profile.comments = request.form.get('comments')
+            if old_comments != profile.comments:
+                changes['comments'] = {"old": old_comments, "new": profile.comments}
+
+        doc_fields = ['feasibility_file', 'ack_file']
+        for field in doc_fields:
+            if field in request.files:
+                file_obj = request.files[field]
+                if file_obj and file_obj.filename != '':
+                    old_file_url = getattr(profile, field)
+                    # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
+                    # extension automatically), giving lavenir/{customer}_{id}/mnre/{doctype}_{id}.{ext}
+                    public_id = f"{sanitize_path_segment(field)}_{sanitize_path_segment(cust.customer_id)}"
+                    try:
+                        res = cloudinary.uploader.upload(
+                            file_obj, folder=folder_path, public_id=public_id, overwrite=True
+                        )
+                    except Exception:
+                        db.session.rollback()
+                        return jsonify({"error": f"Failed to upload {field}. Please try again."}), 502
+                    # Only delete the old file once the new one is confirmed
+                    # uploaded, and only if one actually existed — mirrors the
+                    # safer pattern in bank_loan.py.
+                    if old_file_url:
+                        delete_cloudinary_file(old_file_url, folder_path)
+                    changes[field] = {"old": old_file_url, "new": res['secure_url']}
+                    setattr(profile, field, res['secure_url'])
+
+        profile.updated_by = uid
+        profile.updated_at = datetime.utcnow()
+
+        if changes or action == "CREATE":
+            log = CustomerAuditLog(
+                customer_project_id=cust.id,
+                user_id=uid,
+                action=action,
+                module_name=MODULE_NAME,
+                changes_payload=json.dumps(changes if changes else {"initialized": True})
+            )
+            db.session.add(log)
             
-    if 'registered_beneficiary_name' in request.form:
-        old_name = profile.registered_beneficiary_name
-        profile.registered_beneficiary_name = request.form.get('registered_beneficiary_name')
-        if old_name != profile.registered_beneficiary_name:
-            changes['registered_beneficiary_name'] = {"old": old_name, "new": profile.registered_beneficiary_name}
-            
-    if 'mnre_status' in request.form:
-        old_status = profile.mnre_status
-        profile.mnre_status = request.form.get('mnre_status')
-        if old_status != profile.mnre_status:
-            changes['mnre_status'] = {"old": old_status, "new": profile.mnre_status}
-            
-    if 'comments' in request.form:
-        old_comments = profile.comments
-        profile.comments = request.form.get('comments')
-        if old_comments != profile.comments:
-            changes['comments'] = {"old": old_comments, "new": profile.comments}
-
-    doc_fields = ['feasibility_file', 'ack_file']
-    for field in doc_fields:
-        if field in request.files:
-            file_obj = request.files[field]
-            if file_obj and file_obj.filename != '':
-                old_file_url = getattr(profile, field)
-                delete_cloudinary_file(old_file_url, folder_path)
-
-                # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
-                # extension automatically), giving lavenir/{customer}_{id}/mnre/{doctype}_{id}.{ext}
-                public_id = f"{sanitize_path_segment(field)}_{sanitize_path_segment(cust.customer_id)}"
-                res = cloudinary.uploader.upload(
-                    file_obj, folder=folder_path, public_id=public_id, overwrite=True
-                )
-                changes[field] = {"old": old_file_url, "new": res['secure_url']}
-                setattr(profile, field, res['secure_url'])
-
-    profile.updated_by = uid
-    profile.updated_at = datetime.utcnow()
-
-    if changes or action == "CREATE":
-        log = CustomerAuditLog(
-            customer_project_id=cust.id,
-            user_id=uid,
-            action=action,
-            module_name=MODULE_NAME,
-            changes_payload=json.dumps(changes if changes else {"initialized": True})
-        )
-        db.session.add(log)
-        
-    profile.work_done = "Completed" if profile.mnre_status == 'Completed' and profile.feasibility_file and profile.ack_file else "Pending"
-    db.session.commit()
-    return jsonify({"message": "Operational parameters tracked successfully", "profile": profile.to_dict()}), 200
+        profile.work_done = "Completed" if profile.mnre_status == 'Completed' and profile.feasibility_file and profile.ack_file else "Pending"
+        db.session.commit()
+        return jsonify({"message": "Operational parameters tracked successfully", "profile": profile.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Save failed: {str(e)}"}), 500

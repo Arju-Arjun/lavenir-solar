@@ -6,56 +6,65 @@ const API_BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/api`;
 
 const UNIT_OPTIONS = ["Nos.", "Mtr", "Meter", "Kg", "Litter", "Bag", "Set", "Roll"];
 
+// Toolbar filter: "Both" shows every item regardless of category.
+const CATEGORY_FILTER_OPTIONS = ["All", "Electrical", "Structural"];
+
+// Per-item category assignment: an item itself can only ever be one or the
+// other, never "Both".
+const ITEM_CATEGORY_OPTIONS = ["Electrical", "Structural"];
+
+const SORT_OPTIONS = ["Default", "Quantity: High to Low", "Quantity: Low to High"];
+
 const defaultSolarItems = [
-  { material_name: "Structure work", unit: "Nos.", quantity: 0 },
-  { material_name: "16g, 2.5x1.5 GP pipe", unit: "Nos.", quantity: 0 },
-  { material_name: "16g, 1.5x1.5 GP pipe", unit: "Nos.", quantity: 0 },
-  { material_name: "16g, 1x1 GP pipe", unit: "Nos.", quantity: 0 },
-  { material_name: "End Cap 2.5x1.5", unit: "Nos.", quantity: 0 },
-  { material_name: "End Cap 1.5x1.5", unit: "Nos.", quantity: 0 },
-  { material_name: "End Cap 1x1", unit: "Nos.", quantity: 0 },
-  { material_name: "4x4 Base Plate", unit: "Nos.", quantity: 0 },
-  { material_name: "8 mm Anchor Bolt", unit: "Nos.", quantity: 0 },
-  { material_name: "Corroshield Self Bolt", unit: "Nos.", quantity: 0 },
-  { material_name: "J clamp", unit: "Nos.", quantity: 0 },
-  { material_name: "Self screw", unit: "Nos.", quantity: 0 },
-  { material_name: "Cement", unit: "Kg", quantity: 0 },
-  { material_name: "Primer", unit: "Litter", quantity: 0 },
-  { material_name: "Thinner", unit: "Litter", quantity: 0 },
-  { material_name: "Roller Brush", unit: "Nos.", quantity: 0 },
-  { material_name: "Materials and Consumables", unit: "Set", quantity: 0 },
-  { material_name: "Solar Panels sathwik 625 NdcR", unit: "Nos.", quantity: 0 },
-  { material_name: "AC Cable 6 sqmm", unit: "Mtr", quantity: 0 },
-  { material_name: "Nylon Holder for 8mm Insulated Cable", unit: "Nos.", quantity: 0 },
-  { material_name: "Flexible Aluminium Downconductor  S/cor  50Sqmm", unit: "Meter", quantity: 0 },
-  { material_name: "Earth Pit Chamber 18x18cm", unit: "Nos.", quantity: 0 },
-  { material_name: "Earthing Copper Bonded Rod 14x1220", unit: "Nos.", quantity: 0 },
-  { material_name: "Excel Earthing Compound 10Kg", unit: "Bag", quantity: 0 },
-  { material_name: "25mm Electrical pipe", unit: "Nos.", quantity: 0 },
-  { material_name: "25mm Tee", unit: "Nos.", quantity: 0 },
-  { material_name: "25mm bend", unit: "Nos.", quantity: 0 },
-  { material_name: "25mm elbow", unit: "Nos.", quantity: 0 },
-  { material_name: "25mm coupler", unit: "Nos.", quantity: 0 },
-  { material_name: "MC4 M&F", unit: "Nos.", quantity: 0 },
-  { material_name: "MID CLAMP", unit: "Nos.", quantity: 0 },
-  { material_name: "END CLAMP", unit: "Nos.", quantity: 0 },
-  { material_name: "Fisher and gypsom Screw", unit: "Nos.", quantity: 0 },
-  { material_name: "DC Cable 4 sqmm Black", unit: "Mtr", quantity: 0 },
-  { material_name: "DC Cable 4 sqmm Red", unit: "Mtr", quantity: 0 },
-  { material_name: "Earthing cable 4 sqmm green", unit: "Mtr", quantity: 0 },
-  { material_name: "LA multy spike(SINGLE SPIKE-2NOS.)", unit: "Nos.", quantity: 0 },
-  { material_name: "Earthing Lug 10 mm", unit: "Nos.", quantity: 0 },
-  { material_name: "PVC trunking 45x45mm", unit: "Mtr", quantity: 0 },
-  { material_name: "8mm SS Bolt 2 inch", unit: "Nos.", quantity: 0 },
-  { material_name: "Insulation Tape(R,Y,B, Black, Green)", unit: "Roll", quantity: 0 },
-  { material_name: "Inverter 8kw", unit: "Nos.", quantity: 0 },
-  { material_name: "Isolator 40A", unit: "Nos.", quantity: 0 },
-  { material_name: "Meter Box", unit: "Nos.", quantity: 0 },
-  { material_name: "Cement and Sand", unit: "Bag", quantity: 0 },
-  { material_name: "ACDB 3 Phase-5KW", unit: "Nos.", quantity: 0 },
-  { material_name: "DCDB 2 in 2 out-5KW", unit: "Nos.", quantity: 0 },
-  { material_name: "Energy meter 3 Phase", unit: "Nos.", quantity: 0 },
-  { material_name: "Net meter 3Ph", unit: "Nos.", quantity: 0 }
+  // Structural
+  { material_name: "16g, 2.5x1.5 GP pipe", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "16g, 1.5x1.5 GP pipe", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "16g, 1x1 GP pipe", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "End Cap 2.5x1.5", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "End Cap 1.5x1.5", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "End Cap 1x1", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "4x4 Base Plate", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "8 mm Anchor Bolt", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "Corroshield Self Bolt", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "J clamp", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "Self screw", unit: "Nos.", quantity: 0, category: "Structural" },
+  { material_name: "Cement", unit: "Kg", quantity: 0, category: "Structural" },
+  { material_name: "Primer", unit: "Litter", quantity: 0, category: "Structural" },
+  { material_name: "Thinner", unit: "Litter", quantity: 0, category: "Structural" },
+  { material_name: "Roller Brush", unit: "Nos.", quantity: 0, category: "Structural" },
+  // Electrical
+  { material_name: "Solar Panels", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "AC Cable 6 sqmm", unit: "Mtr", quantity: 0, category: "Electrical" },
+  { material_name: "Nylon Holder for 8mm Insulated Cable", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Flexible Aluminium Downconductor  S/cor  50Sqmm", unit: "Meter", quantity: 0, category: "Electrical" },
+  { material_name: "Earth Pit Chamber 18x18cm", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Earthing Copper Bonded Rod 14x1220", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Excel Earthing Compound 10Kg", unit: "Bag", quantity: 0, category: "Electrical" },
+  { material_name: "25mm Electrical pipe", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "25mm Tee", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "25mm bend", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "25mm elbow", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "25mm coupler", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "MC4 M&F", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "MID CLAMP", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "END CLAMP", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Fisher and gypsom Screw", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "DC Cable 4 sqmm Black", unit: "Mtr", quantity: 0, category: "Electrical" },
+  { material_name: "DC Cable 4 sqmm Red", unit: "Mtr", quantity: 0, category: "Electrical" },
+  { material_name: "Earthing cable 4 sqmm green", unit: "Mtr", quantity: 0, category: "Electrical" },
+  { material_name: "LA multy spike(SINGLE SPIKE-2NOS.)", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Earthing Lug 10 mm", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "PVC trunking 45x45mm", unit: "Mtr", quantity: 0, category: "Electrical" },
+  { material_name: "8mm SS Bolt 2 inch", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Insulation Tape(R,Y,B, Black, Green)", unit: "Roll", quantity: 0, category: "Electrical" },
+  { material_name: "Inverter 8kw", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Isolator 40A", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Meter Box", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Cement and Sand", unit: "Bag", quantity: 0, category: "Electrical" },
+  { material_name: "ACDB 3 Phase-5KW", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "DCDB 2 in 2 out-5KW", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Energy meter 3 Phase", unit: "Nos.", quantity: 0, category: "Electrical" },
+  { material_name: "Net meter 3Ph", unit: "Nos.", quantity: 0, category: "Electrical" }
 ];
 
 // Centralized fetch helper: attaches auth header + base URL, avoids repeating
@@ -78,6 +87,15 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Ref to keep track of input elements for auto-scrolling and focus
+  const inputRefs = useRef([]);
+
+  // Category-wise filtering + search — used on both the Material Inventory
+  // (delivery) page and the Installation Material Items (usage) section.
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortOption, setSortOption] = useState("Default");
 
   const [modalConfig, setModalConfig] = useState({
     isOpen: false,
@@ -132,11 +150,41 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
   };
 
   const handleAddItemRow = () => {
-    setItemsList((prev) => [...prev, { material_name: "", quantity: 0, unit: "Nos." }]);
+    setItemsList((prev) => {
+      const updated = [
+        ...prev,
+        { material_name: "", quantity: 0, unit: "Nos.", category: "Electrical" }
+      ];
+      return updated;
+    });
+
+    // Automatically scroll to and focus the newly created input row
+    setTimeout(() => {
+      const newIndex = itemsList.length;
+      if (inputRefs.current[newIndex]) {
+        inputRefs.current[newIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+        inputRefs.current[newIndex].focus();
+      }
+    }, 100);
   };
 
   const handleRemoveItemRow = (index) => {
     setItemsList((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Finds the first material name that repeats within the same category
+  // (case/whitespace-insensitive). Returns null when there are no duplicates.
+  const findDuplicateMaterial = (items) => {
+    const seen = new Set();
+    for (const it of items) {
+      const name = (it.material_name || "").trim().toLowerCase();
+      if (!name) continue;
+      const category = (it.category || "Electrical").trim().toLowerCase();
+      const key = `${name}|${category}`;
+      if (seen.has(key)) return it.material_name;
+      seen.add(key);
+    }
+    return null;
   };
 
   // --- USAGE/INSTALLATION MODE HANDLERS (Bilateral Auto-Calculate) ---
@@ -176,17 +224,32 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
 
   // --- SAVE ACTIONS ---
   const handleSaveClick = () => {
+    // Automatically filter out rows where material_name is empty or just whitespace to save time
+    const cleanedItems = itemsList.filter((item) => (item.material_name || "").trim() !== "");
+    
+    if (cleanedItems.length !== itemsList.length) {
+      setItemsList(cleanedItems);
+    }
+
+    if (mode === "delivery") {
+      const duplicateName = findDuplicateMaterial(cleanedItems);
+      if (duplicateName) {
+        alert(`Duplicate material item found: "${duplicateName}". Please rename or remove the duplicate row before saving.`);
+        return;
+      }
+    }
+
     setModalConfig({
       isOpen: true,
       title: "Confirm Inventory Update",
       message: mode === "delivery"
         ? "Are you sure you want to save these material delivery rows?"
         : "Are you sure you want to update the field usage and remaining balances?",
-      onConfirm: executeSave
+      onConfirm: () => executeSave(cleanedItems)
     });
   };
 
-  const executeSave = async () => {
+  const executeSave = async (cleanedItems) => {
     setSaving(true);
     setModalConfig((prev) => ({ ...prev, isOpen: false }));
 
@@ -194,7 +257,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
       if (mode === "delivery") {
         // Save the whole array via the main material endpoint
         const payload = new FormData();
-        const itemsWithSlNo = itemsList.map((item, index) => ({
+        const itemsWithSlNo = cleanedItems.map((item, index) => ({
           ...item,
           sl_no: index + 1
         }));
@@ -209,7 +272,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
 
       } else if (mode === "usage") {
         // Only items with an id and a delivered quantity > 0 are eligible.
-        const validItemsToUpdate = itemsList.filter(
+        const validItemsToUpdate = cleanedItems.filter(
           (item) => item.id && parseFloat(item.quantity) > 0
         );
 
@@ -255,14 +318,37 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
 
   // View Mode / Usage Mode Filter: Only show items where quantity > 0 (unless
   // editing delivery where we need to see 0 qty items to add quantities)
-  const displayItems = useMemo(
-    () => (isEditing && mode === "delivery"
-      ? itemsList
-      : itemsList.filter((item) => parseFloat(item.quantity) > 0)),
-    [itemsList, isEditing, mode]
-  );
+    // Keeps each item paired with its real index in itemsList so edits/deletes
+    // still target the correct row even after category/search/sort filtering.
+    const displayItems = useMemo(() => {
+      const withIndex = itemsList.map((item, idx) => ({ item, idx }));
 
-  const columnCount = mode === "usage" ? 6 : (isEditing ? 5 : 4);
+      let filtered = mode === "delivery"
+        ? withIndex
+        : withIndex.filter(({ item }) => parseFloat(item.quantity) > 0);
+
+      // Category filter
+      if (categoryFilter !== "All") {
+        filtered = filtered.filter(({ item }) => (item.category || "Electrical") === categoryFilter);
+      }
+
+      // Search filter
+      if (searchTerm.trim()) {
+        const q = searchTerm.trim().toLowerCase();
+        filtered = filtered.filter(({ item }) => (item.material_name || "").toLowerCase().includes(q));
+      }
+
+      // Sort logic based on Quantity
+      if (sortOption === "Quantity: High to Low") {
+        filtered.sort((a, b) => (parseFloat(b.item.quantity) || 0) - (parseFloat(a.item.quantity) || 0));
+      } else if (sortOption === "Quantity: Low to High") {
+        filtered.sort((a, b) => (parseFloat(a.item.quantity) || 0) - (parseFloat(b.item.quantity) || 0));
+      }
+
+      return filtered;
+    }, [itemsList, mode, categoryFilter, searchTerm, sortOption]);
+
+  const columnCount = mode === "usage" ? 7 : (isEditing ? 6 : 5);
 
   if (loading || saving) {
     return (
@@ -296,6 +382,40 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
         </div>
       </div>
 
+      {/* Category filter + search + sort — applies to both Material Inventory and
+          Installation Material Items sections */}
+      <div className="material-item-toolbar" style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "15px" }}>
+        
+        <input
+          type="text"
+          className="form-input material-item-search-input"
+          placeholder="Search material name..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+
+        <select
+          className="control-select-dropdown material-item-category-filter"
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+        >
+          {CATEGORY_FILTER_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+
+        <select
+          className="control-select-dropdown material-item-sort-filter"
+          value={sortOption}
+          onChange={(e) => setSortOption(e.target.value)}
+        >
+          {SORT_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+
+      </div>
+
       {/* Directory Data Grid */}
       <div className="table-responsive-wrapper">
         <table className="directory-data-grid">
@@ -303,6 +423,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
             <tr>
               <th className="material-item-col-sl">Sl</th>
               <th>Material Name</th>
+              <th className="material-item-col-category">Category</th>
               <th className="material-item-col-unit">Unit</th>
               <th className="material-item-col-qty">Total Qty</th>
 
@@ -322,9 +443,9 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                 </td>
               </tr>
             ) : (
-              displayItems.map((item, index) => (
-                <tr key={item.id ?? `${item.material_name}-${index}`}>
-                  <td>{isEditing ? index + 1 : item.sl_no || index + 1}</td>
+              displayItems.map(({ item, idx }) => (
+                  <tr key={item.id ?? `row-${idx}`}>
+                  <td>{isEditing ? idx + 1 : item.sl_no || idx + 1}</td>
 
                   {/* Name, Unit, Qty Fields (Editable ONLY in Delivery Mode) */}
                   <td>
@@ -332,8 +453,9 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                       <input
                         type="text"
                         className="form-input"
+                        ref={(el) => (inputRefs.current[idx] = el)}
                         value={item.material_name || ""}
-                        onChange={(e) => handleDeliveryChange(index, "material_name", e.target.value)}
+                        onChange={(e) => handleDeliveryChange(idx, "material_name", e.target.value)}
                       />
                     ) : (
                       item.material_name || "Unnamed"
@@ -343,8 +465,23 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                     {isEditing && mode === "delivery" ? (
                       <select
                         className="control-select-dropdown"
+                        value={item.category || "Electrical"}
+                        onChange={(e) => handleDeliveryChange(idx, "category", e.target.value)}
+                      >
+                        {ITEM_CATEGORY_OPTIONS.map((cat) => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      item.category || "Electrical"
+                    )}
+                  </td>
+                  <td>
+                    {isEditing && mode === "delivery" ? (
+                      <select
+                        className="control-select-dropdown"
                         value={item.unit || "Nos."}
-                        onChange={(e) => handleDeliveryChange(index, "unit", e.target.value)}
+                        onChange={(e) => handleDeliveryChange(idx, "unit", e.target.value)}
                       >
                         {UNIT_OPTIONS.map((unit) => (
                           <option key={unit} value={unit}>{unit}</option>
@@ -362,7 +499,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                         step="any"
                         className="form-input"
                         value={item.quantity}
-                        onChange={(e) => handleDeliveryChange(index, "quantity", e.target.value)}
+                        onChange={(e) => handleDeliveryChange(idx, "quantity", e.target.value)}
                         onWheel={(e) => e.target.blur()}
                       />
                     ) : (
@@ -382,7 +519,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                             step="any"
                             className="form-input material-item-used-input"
                             value={item.used_quantity ?? ""}
-                            onChange={(e) => handleUsageChange(index, "used_quantity", e.target.value)}
+                            onChange={(e) => handleUsageChange(idx, "used_quantity", e.target.value)}
                             onWheel={(e) => e.target.blur()}
                           />
                         ) : (
@@ -398,7 +535,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                             step="any"
                             className="form-input material-item-remaining-input"
                             value={item.remaining_quantity ?? ""}
-                            onChange={(e) => handleUsageChange(index, "remaining_quantity", e.target.value)}
+                            onChange={(e) => handleUsageChange(idx, "remaining_quantity", e.target.value)}
                             onWheel={(e) => e.target.blur()}
                           />
                         ) : (
@@ -413,7 +550,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
                     <td className="material-item-col-action">
                       <button
                         type="button"
-                        onClick={() => handleRemoveItemRow(index)}
+                        onClick={() => handleRemoveItemRow(idx)}
                         className="payment-delete-card-btn material-item-delete-btn"
                       >
                         <FaTrash />

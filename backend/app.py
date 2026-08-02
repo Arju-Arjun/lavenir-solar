@@ -4,8 +4,9 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from dotenv import load_dotenv
-from models import db
 from datetime import timedelta
+
+from models import db
 
 from routes.auth import auth_bp
 from routes.customers import customers_bp
@@ -29,45 +30,43 @@ from routes.dashboard import admin_dashboard_bp, staff_dashboard_bp
 from routes.documents import documents_bp
 from routes.profile import profile_bp
 from routes.workflow import workflow_bp
-
-# Background job: twice-daily maintenance/renewal notification checks
+from routes.complaints import complaints_bp
 from routes.scheduler import start_scheduler
-
 
 load_dotenv()
 
 app = Flask(__name__)
 
-# FIX: Explicitly allow the Authorization header and cross-origin preflight requests
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173","http://localhost:4173", "http://127.0.0.1:4173","https://lavenir-solar-rho.vercel.app"],  # Match your React dev server port
+        "origins": [
+            "http://localhost:5173", "http://127.0.0.1:5173",
+            "http://localhost:4173", "http://127.0.0.1:4173",
+            "https://lavenir-solar-rho.vercel.app",
+        ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True
+        "supports_credentials": True,
     }
 })
-
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# FIX: Added engine_options to prevent SSL EOF / connection timeout errors on Render
+# pool_pre_ping + recycle avoid stale-connection / SSL EOF errors on Render
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "pool_pre_ping": True,
     "pool_recycle": 300,
 }
 
-
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "fallback_secret_key")
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30) 
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30)
 jwt = JWTManager(app)
 
-# Global Cloudinary Configuration Integration
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
     api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
 )
 
 db.init_app(app)
@@ -75,10 +74,11 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
-# Start the background notification scheduler (first/renewal maintenance checks)
+# NOTE: runs once per process. If deployed with >1 gunicorn/uwsgi worker,
+# set SCHEDULER_ENABLED=false (see scheduler.py) on all but one worker, or
+# the scheduler fires duplicate notification checks per tick.
 start_scheduler(app)
 
-# Register Blueprint Routers
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(customers_bp, url_prefix='/api/customers')
 app.register_blueprint(site_visit_bp, url_prefix='/api/site-visit')
@@ -87,7 +87,7 @@ app.register_blueprint(permissions_bp, url_prefix='/api/staff/permissions')
 app.register_blueprint(mnre_bp, url_prefix='/api/mnre-profile')
 app.register_blueprint(payment_bp, url_prefix='/api/payment')
 app.register_blueprint(bank_loan_bp, url_prefix='/api/bank-loan')
-app.register_blueprint(kseb_bp, url_prefix='/api/kseb')  
+app.register_blueprint(kseb_bp, url_prefix='/api/kseb')
 app.register_blueprint(kseb_reg_bp, url_prefix='/api/kseb-registration')
 app.register_blueprint(mnre_installation_bp, url_prefix='/api/mnre-installation')
 app.register_blueprint(dcr_bp, url_prefix='/api/dcr')
@@ -102,13 +102,16 @@ app.register_blueprint(staff_dashboard_bp, url_prefix='/api/staff/dashboard')
 app.register_blueprint(documents_bp, url_prefix='/api/documents')
 app.register_blueprint(profile_bp, url_prefix='/api/profile')
 app.register_blueprint(workflow_bp, url_prefix='/api/workflow')
+app.register_blueprint(complaints_bp, url_prefix='/api/complaints')
+
 
 @app.route('/')
 def health_check():
     return jsonify({
-        "status": "online", 
-        "message": "Solar ERP Backend API is running successfully!"
+        "status": "online",
+        "message": "Lavenir Solar Backend API is running successfully!"
     }), 200
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000, use_reloader=False)

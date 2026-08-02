@@ -1,4 +1,4 @@
-const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`; // change to your deployed backend URL in production
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`;
 
 // Convert VAPID public key (base64) to Uint8Array — required by pushManager.subscribe
 function urlBase64ToUint8Array(base64String) {
@@ -18,38 +18,47 @@ export async function subscribeToPush(token) {
     return null;
   }
 
-  // 1. Ask permission
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') {
-    console.warn('Notification permission denied');
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      console.warn('Notification permission denied');
+      return null;
+    }
+
+    const registration = await navigator.serviceWorker.ready;
+
+    const keyRes = await fetch(`${API_BASE}/push/vapid-public-key`);
+    if (!keyRes.ok) {
+      throw new Error(`Failed to fetch VAPID key: ${keyRes.status}`);
+    }
+    const { publicKey } = await keyRes.json();
+    if (!publicKey) {
+      throw new Error('VAPID public key missing from server response');
+    }
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+    }
+
+    const subscribeRes = await fetch(`${API_BASE}/push/subscribe`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(subscription)
+    });
+    if (!subscribeRes.ok) {
+      throw new Error(`Failed to register subscription: ${subscribeRes.status}`);
+    }
+
+    return subscription;
+  } catch (err) {
+    console.error('Push subscription failed:', err);
     return null;
   }
-
-  // 2. Get service worker registration
-  const registration = await navigator.serviceWorker.ready;
-
-  // 3. Get VAPID public key from backend
-  const keyRes = await fetch(`${API_BASE}/push/vapid-public-key`);
-  const { publicKey } = await keyRes.json();
-
-  // 4. Subscribe (or reuse existing subscription)
-  let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey)
-    });
-  }
-
-  // 5. Send subscription to backend
-  await fetch(`${API_BASE}/push/subscribe`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify(subscription)
-  });
-
-  return subscription;
 }

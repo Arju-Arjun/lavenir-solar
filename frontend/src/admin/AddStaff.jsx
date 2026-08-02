@@ -135,8 +135,10 @@ const AddStaff = ({ onCancel }) => {
             name="email" 
             value={formData.email} 
             onChange={handleChange} 
+            pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+            title="Please enter a valid email address (e.g., user@example.com)"
             required 
-          />
+          />  
         </div>
 
         {/* Login Password Input Block */}
@@ -160,7 +162,10 @@ const AddStaff = ({ onCancel }) => {
               type="text" 
               name="phone_number" 
               value={formData.phone_number} 
-              onChange={handleChange} 
+              onChange={handleChange}
+              maxLength="10"
+              pattern="[0-9]{10}"
+              title="Phone number must be exactly 10 digits"
             />
           </div>
         </div>

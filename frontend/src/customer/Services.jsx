@@ -55,7 +55,7 @@ const Services = ({ customerId, customer }) => {
   const [existingPhotos, setExistingPhotos] = useState([]);
   const [removedPhotos, setRemovedPhotos] = useState([]);
   const [expandedService, setExpandedService] = useState(null);
-  
+  const [requestLoading, setRequestLoading] = useState(false);
   const [modalConfig, setModalConfig] = useState({
     isOpen: false,
     title: "",
@@ -74,13 +74,60 @@ const Services = ({ customerId, customer }) => {
     comments: ""
   });
 
+  const pendingRequestsStorageKey = customerId ? `service_pending_requests_${customerId}` : null;
+
+  const updatePendingRequestsCache = (requests) => {
+    setPendingRequests(requests);
+    if (pendingRequestsStorageKey) {
+      if (Object.keys(requests).length) {
+        localStorage.setItem(pendingRequestsStorageKey, JSON.stringify(requests));
+      } else {
+        localStorage.removeItem(pendingRequestsStorageKey);
+      }
+    }
+  };
+
+  const fetchAccessRequests = async () => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/service/check-access/`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const requests = data.pending_requests || {};
+        updatePendingRequestsCache(requests);
+        if (data.view || isUserAdmin) {
+          fetchServiceDataset();
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load service access state", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!customerId) return;
+
+    const cachedPending = pendingRequestsStorageKey ? localStorage.getItem(pendingRequestsStorageKey) : null;
+    if (cachedPending) {
+      try {
+        setPendingRequests(JSON.parse(cachedPending));
+      } catch {
+        localStorage.removeItem(pendingRequestsStorageKey);
+      }
+    }
+
+    fetchAccessRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerId]);
+
   // Automatically pull datasets when page sorting options or customer target indexes change
   useEffect(() => {
-    if (access.view) {
+    if (access.view || isUserAdmin) {
       fetchServiceDataset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerId, access.view, sortBy]);
+  }, [customerId, access.view, isUserAdmin, sortBy]);
 
   const fetchServiceDataset = async () => {
     setLoading(true);
@@ -136,33 +183,42 @@ const Services = ({ customerId, customer }) => {
     setRemovedPhotos([]);
   };
 
-  const handleRequestAccessSubmit = async (permissionType) => {
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/service/request-access/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`
-        },
-        body: JSON.stringify({ permission_type: permissionType })
-      });
+ // Service module-il access request cheyyumpol pending status show cheyyanulla changes:
 
-      if (response.ok) {
-        const res = await response.json();
-        setPendingRequests((prev) => ({
-          ...prev,
-          [permissionType]: res.message || "Access request pending approval."
-        }));
+const handleRequestAccessSubmit = async (permissionType) => {
+ setRequestLoading(true);
+  try {
+    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/service/request-access/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("token")}`
+      },
+      body: JSON.stringify({ permission_type: permissionType })
+    });
 
-        // Quietly poll and sync global metrics matrix state if role criteria upgrades automatically
-        if (refetchPermissions) {
-          await refetchPermissions();
-        }
+    if (response.ok) {
+      const res = await response.json();
+      setPendingRequests((prev) => ({
+        ...prev,
+        [permissionType]: "Pending"
+      }));
+
+      if (refetchPermissions) {
+        await refetchPermissions();
       }
-    } catch (err) {
-      console.error("Access request error", err);
+      await fetchAccessRequests();
+      alert(res.message);
+    } else {
+      const errorDetails = await response.json().catch(() => ({}));
+      alert(errorDetails.error || "Failed to submit permission request.");
     }
-  };
+  } catch (err) {
+    console.error("Access request error", err);
+  } finally {
+    setRequestLoading(false);
+  }
+};
 
   const handleInputChange = (e) => {
     if (!access.update) return;
@@ -368,7 +424,13 @@ const Services = ({ customerId, customer }) => {
   };
 
   // Render Authentication Entry locking box structure if global matrix matrix schema criteria blocks visibility switches
-  if (!access.view) {
+  // NOTE (fix): admins bypass permission checks entirely on the backend, but
+  // `access` here only reflects permissions["Service"], which can still be
+  // {view: false} on the very first render (before the permissions map has
+  // loaded). That briefly flashed the "Access Restricted / Request Access"
+  // screen for admins too. Admins should never see this gate, so short-circuit
+  // it with isUserAdmin - the normal `loading` spinner below covers the wait.
+  if (!isUserAdmin && !access.view) {
     return (
       <div className="permission-locked-wrapper-card">
         <div className="permission-locked-content-box">
@@ -378,7 +440,14 @@ const Services = ({ customerId, customer }) => {
           {pendingRequests["view"] ? (
             <div className="sitevisit-alert-success-banner">⚠️ View Request Pending Approval</div>
           ) : (
-            <button type="button" className="request-access-trigger-btn" onClick={() => handleRequestAccessSubmit("view")}>Request View Access</button>
+            <button
+              type="button"
+              className="request-access-trigger-btn"
+              onClick={() => handleRequestAccessSubmit("view")}
+              disabled={requestLoading}
+            >
+              Request View Access
+            </button>
           )}
         </div>
       </div>
@@ -401,7 +470,9 @@ const Services = ({ customerId, customer }) => {
             <div style={{ display: "flex", gap: "10px", marginLeft: "auto" }}>
               {!access.update && (
                 pendingRequests["update"] ? (
-                  <span style={{ fontSize: "0.8rem", color: "#ca8a04", fontWeight: "600" }}>⚠️ Update Request Pending</span>
+                  <button type="button" className="request-permission-inline-btn" disabled style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", padding: "4px 8px", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: "4px", color: "#94a3b8", cursor: "not-allowed" }}>
+                    ⚠️ {pendingRequests["update"]}
+                  </button>
                 ) : (
                   <button type="button" className="request-permission-inline-btn" onClick={() => handleRequestAccessSubmit("update")} style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", padding: "4px 8px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", color: "#475569" }}>
                     <FaPaperPlane size={10} /> Request Update Authorization
@@ -511,9 +582,16 @@ const Services = ({ customerId, customer }) => {
               <p className="placeholder-primary-msg" style={{ marginBottom: "15px" }}>No service records have been added yet for this customer.</p>
               {!access.update && (
                 pendingRequests["update"] ? (
-                  <div className="sitevisit-alert-success-banner">{pendingRequests["update"]}</div>
+                  <div className="sitevisit-alert-success-banner">⚠️ Update Request Pending Approval</div>
                 ) : (
-                  <button type="button" className="request-access-trigger-btn" onClick={() => handleRequestAccessSubmit("update")}>Request Update Authorization</button>
+                  <button
+                    type="button"
+                    className="request-access-trigger-btn"
+                    onClick={() => handleRequestAccessSubmit("update")}
+                    disabled={requestLoading}
+                  >
+                    Request Update Authorization
+                  </button>
                 )
               )}
             </div>
@@ -562,10 +640,10 @@ const Services = ({ customerId, customer }) => {
             <textarea name="parts_replaced" value={formData.parts_replaced} onChange={handleInputChange} disabled={!access.update} rows="3" placeholder="e.g. Inverter, Battery" />
           </div>
 
-          <div className="form-group-element" style={{ marginTop: "16px" }}>
+          {/* <div className="form-group-element" style={{ marginTop: "16px" }}>
             <label>Next Service Due</label>
-            <input type="date" name="next_service_due" value={formData.next_service_due} onChange={handleInputChange} disabled={!access.update} />
-          </div>
+            <input type="date" name="next_service_due" value={formData.next_service_due} onChange={handleInputChange} disabled={!access.update}  readOnly/>
+          </div> */}
 
           <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
             <label>Comments</label>

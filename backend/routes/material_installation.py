@@ -7,6 +7,7 @@ import cloudinary.uploader
 import json
 from utils import (
     check_permission, 
+    permission_allows_for_user,
     delete_cloudinary_file,
     handle_blueprint_check_access,
     handle_blueprint_request_access,
@@ -15,7 +16,7 @@ from utils import (
 )
 
 installation_bp = Blueprint('installation', __name__)
-MODULE_NAME = 'Installation Progress'
+MODULE_NAME = 'Material Installation'
 # Folder segment used in the storage path (kept separate from MODULE_NAME
 # above, which is used for the permissions matrix and audit logs).
 FOLDER_MODULE_NAME = 'materialinstallation'
@@ -67,7 +68,7 @@ def get_material_installation(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'view', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'view', MODULE_NAME):
         return jsonify({"error": "Unauthorized permission profile view parameters."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -94,7 +95,7 @@ def create_material_installation(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'update', MODULE_NAME):
         return jsonify({"error": "Unauthorized submission mapping."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -102,9 +103,23 @@ def create_material_installation(customer_id):
         return jsonify({"error": "Customer project data target parameters not found."}), 404
 
     if customer_project.material_installation_rel:
-        return jsonify({"error": "Installation record matrix configuration already initialized. Use update instead."}), 400
+        # CHANGED: a MaterialInstallation stub row now gets auto-created for
+        # every customer at customer-creation time (see customers.py
+        # create_customer()), so this branch is ALWAYS true from day one -
+        # the old "already initialized, use update instead" 400 would block
+        # every first-time real save. Redirect to the update handler
+        # instead, matching the exact pattern material.py's
+        # create_material_delivery() already uses for this same situation.
+        return update_material_installation(customer_id)
 
-    if not customer_project.material_delivery_rel:
+    delivery = customer_project.material_delivery_rel
+    # CHANGED: was `if not customer_project.material_delivery_rel:` (a bare
+    # existence check). MaterialDelivery now gets an auto-created stub row
+    # for every customer at customer-creation time, so that existence check
+    # would never block anything anymore - this checks whether delivery is
+    # actually confirmed (the same three flags every other delivery-related
+    # check in this codebase reads) instead.
+    if not delivery or not (delivery.electrical_delivered and delivery.structure_delivered and delivery.panel_delivered):
         return jsonify({"error": "Material delivery details must be recorded before installation can begin."}), 400
 
     # Centralized storage folder for this customer + module, e.g.:
@@ -158,7 +173,6 @@ def create_material_installation(customer_id):
     installation.work_done = "Completed" if (electrical_installed and structure_installed and len(uploaded_urls) > 0) else "Pending"
     
     db.session.add(installation)
-    db.session.commit()
 
     audit_log = CustomerAuditLog(
         customer_project_id=customer_project.id,
@@ -181,7 +195,7 @@ def update_material_installation(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'update', MODULE_NAME):
         return jsonify({"error": "Unauthorized write authentication layers."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -265,8 +279,6 @@ def update_material_installation(customer_id):
     track('work_done', installation.work_done, new_work_done)
     installation.work_done = new_work_done
 
-    db.session.commit()
-
     if changes:
         audit_log = CustomerAuditLog(
             customer_project_id=customer_project.id,
@@ -276,7 +288,8 @@ def update_material_installation(customer_id):
             changes_payload=json.dumps(changes)
         )
         db.session.add(audit_log)
-        db.session.commit()
+
+    db.session.commit()
 
     return jsonify({"message": "Material installation logs tracking matrix updated safely.", "installation": _serialize_installation(installation)}), 200
 
@@ -289,7 +302,7 @@ def delete_material_installation(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'delete', MODULE_NAME):
+    if not is_admin and not permission_allows_for_user(user, 'delete', MODULE_NAME):
         return jsonify({"error": "Unauthorized action clearance."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -307,7 +320,6 @@ def delete_material_installation(customer_id):
             delete_cloudinary_file(img, folder_path)
 
     db.session.delete(installation)
-    db.session.commit()
 
     audit_log = CustomerAuditLog(
         customer_project_id=customer_project.id,

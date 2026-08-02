@@ -29,7 +29,7 @@ const MaterialInstallation = ({ customerId }) => {
   const modulePermissions = useMemo(
     () => isAdmin
       ? { view: true, create: true, update: true, delete: true }
-      : (permissions["Installation Progress"] || permissions["Installation Progress"] || permissions["Installation Progress"] || { view: false, create: false, update: false, delete: false }),
+      : (permissions["Material Installation"] || permissions["Material Installation"] || permissions["Material Installation"] || { view: false, create: false, update: false, delete: false }),
     [isAdmin, permissions]
   );
 

@@ -6,9 +6,9 @@ const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`;
 const USE_STATIC_FILES = true;
 
 const STATIC_SUPPLEMENT_FILES = [
-  { name: 'Warranty Terms.pdf', url: '/assets/supplements/warranty-terms.pdf' },
-  { name: 'Maintenance Guide.pdf', url: '/assets/supplements/maintenance-guide.pdf' },
-  { name: 'Safety Certificate.pdf', url: '/assets/supplements/safety-certificate.pdf' }
+  { name: 'Annexure 1', url: '/public/assets/Annexure-1.pdf' },
+  { name: 'Annexure 2', url: '/public/assets/Annexure-2.pdf' },
+  { name: 'Annexure 3', url: '/public/assets/Annexure-3.pdf' }
 ];
 
 function Supplements() {

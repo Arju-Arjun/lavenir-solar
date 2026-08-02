@@ -24,6 +24,12 @@ MODULE_NAME = 'Bank Loan'
 FOLDER_MODULE_NAME = 'bankloan'
 
 
+# Below this, a loan's due_amount is treated as "fully settled" - money math
+# on floats rarely lands on an exact 0.0, so an equality check would
+# silently never mark a fully-paid loan as Completed.
+DUE_AMOUNT_EPSILON = 0.01
+
+
 def _json_default(obj):
     """
     FIX: json.dumps(changes) was crashing with "Object of type Decimal is
@@ -242,6 +248,9 @@ def save_bank_loan(customer_id):
             except ValueError:
                 return jsonify({"error": "Invalid total approved loan amount. Must be a numeric value."}), 400
 
+            if new_approved_amt < 0:
+                return jsonify({"error": "total_approved_loan_amount cannot be negative."}), 400
+
             loan.total_approved_loan_amount = new_approved_amt
             if old_approved_amt != loan.total_approved_loan_amount:
                 changes['total_approved_loan_amount'] = {"old": float(old_approved_amt or 0), "new": float(loan.total_approved_loan_amount)}
@@ -256,9 +265,12 @@ def save_bank_loan(customer_id):
                 payments_data = json.loads(request.form.get('loan_payments') or '[]')
                 if not isinstance(payments_data, list):
                     raise ValueError("loan_payments must be a JSON array")
-                total_amt = sum(float(p.get('amount', 0)) for p in payments_data)
+                amounts = [float(p.get('amount', 0)) for p in payments_data]
+                if any(a < 0 for a in amounts):
+                    raise ValueError("payment amounts cannot be negative")
+                total_amt = sum(amounts)
             except (ValueError, TypeError, AttributeError):
-                return jsonify({"error": "Invalid loan_payments payload. Expected a JSON array of {label, amount} objects."}), 400
+                return jsonify({"error": "Invalid loan_payments payload. Expected a JSON array of {label, amount} objects with non-negative amounts."}), 400
 
             loan.loan_payments = json.dumps(payments_data)
             loan.total_loan_amount = total_amt
@@ -287,7 +299,7 @@ def save_bank_loan(customer_id):
         loan.due_amount = float(loan.total_approved_loan_amount or 0) - float(loan.total_loan_amount or 0)
 
         is_work_done = False
-        has_positive_payments = float(loan.total_approved_loan_amount or 0) > 0 and float(loan.due_amount or 0) == 0
+        has_positive_payments = float(loan.total_approved_loan_amount or 0) > 0 and abs(float(loan.due_amount or 0)) < DUE_AMOUNT_EPSILON
         if (loan.jansamarth_status == 'Completed' and
             loan.document_submission in ['By Hand', 'Mail', 'By Hand and Mail'] and
             has_positive_payments and

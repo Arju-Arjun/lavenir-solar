@@ -1,17 +1,42 @@
 import json
 import re
+import os
+import smtplib
+from email.mime.text import MIMEText
 import cloudinary.uploader
-from models import db, User, UserPermission, PermissionRequest
+from models import db, User, UserPermission, PermissionRequest, SiteVisit, KSEB
 from flask import jsonify
 
+
+def send_reset_email(to_email, reset_link):
+    smtp_server = os.getenv('SMTP_SERVER')
+    smtp_port = int(os.getenv('SMTP_PORT', 587))
+    username = os.getenv('MAIL_USERNAME')
+    password = os.getenv('SMTP_PASSWORD')
+    use_tls = os.getenv('MAIL_USE_TLS', 'True') == 'True'
+
+    msg = MIMEText(
+        f"Hello,\n\nWe received a request to reset your password.\n\n"
+        f"Click the link below to set a new password (valid for 15 minutes):\n{reset_link}\n\n"
+        f"If you didn't request this, you can safely ignore this email."
+    )
+    msg['Subject'] = 'Password Reset Request - Lavenir Solar '
+    msg['From'] = username
+    msg['To'] = to_email
+
+    server = smtplib.SMTP(smtp_server, smtp_port)
+    try:
+        if use_tls:
+            server.starttls()
+        server.login(username, password)
+        server.sendmail(username, to_email, msg.as_string())
+    finally:
+        server.quit()
+
+
 def delete_cloudinary_file(file_url, folder_path):
-    """
-    Extracts the public_id from a Cloudinary URL and destroys the asset on Cloudinary storage.
-    Returns True if successfully deleted, False otherwise.
-    """
     if file_url and "res.cloudinary.com" in file_url:
         try:
-            # Extract public asset identifier from the asset URL string
             public_id = file_url.split('/')[-1].split('.')[0]
             cloudinary.uploader.destroy(f"{folder_path}/{public_id}")
             return True
@@ -21,135 +46,112 @@ def delete_cloudinary_file(file_url, folder_path):
 
 
 def is_admin_user(user_id):
-    """
-    Returns True only if user_id resolves to an existing user with the 'admin' role.
-    Centralized so every admin-only route checks the same way.
-    """
     user = User.query.get(user_id)
     return bool(user and user.role and user.role.strip().lower() == 'admin')
 
 
+def _permission_matrix_allows(user, permission_type, module_name):
+    """Pure in-memory check against an already-loaded User — no query."""
+    if user.role and user.role.strip().lower() == 'admin':
+        return True
+    perm_record = UserPermission.query.filter_by(user_id=user.id).first()
+    if perm_record and perm_record.permissions_matrix:
+        try:
+            matrix = json.loads(perm_record.permissions_matrix)
+            return matrix.get(module_name, {}).get(permission_type) is True
+        except Exception:
+            return False
+    return False
+
+
+def permission_allows_for_user(user, permission_type, module_name):
+    """
+    Same in-memory check as check_permission(), but takes an already-loaded
+    User object. Use this instead of check_permission() whenever the caller
+    has already done User.query.get(uid) - avoids a redundant duplicate
+    user fetch on every permission check.
+    """
+    return _permission_matrix_allows(user, permission_type, module_name)
+
+
 def check_permission(user_id, permission_type, module_name):
     """
-    Checks permissions strictly against the live UserPermission matrix — the single
-    source of truth for what a staff member is currently allowed to do.
-
-    NOTE: We intentionally do NOT fall back to checking for an 'Approved'
-    PermissionRequest row here. process_permission_request() already writes
-    approvals into permissions_matrix at approval time, so the matrix always
-    reflects the latest state. A separate "any approved request ever" fallback
-    would let access silently persist even after an admin unchecks it later in
-    PermissionManagement.jsx, since revoking there only updates the matrix and
-    has no way to also invalidate old PermissionRequest rows.
+    Checks strictly against the live UserPermission matrix (single source of
+    truth). No fallback to "any approved request ever" - process_permission_request()
+    already writes approvals into the matrix at approval time, and a fallback
+    would let access silently persist after an admin revokes it later.
     """
     user = User.query.get(user_id)
     if not user:
         return False
+    return _permission_matrix_allows(user, permission_type, module_name)
 
-    # Administrative role bypass barrier: Admins automatically possess full permissions
-    if user.role and user.role.strip().lower() == 'admin':
-        return True
-
-    perm_record = UserPermission.query.filter_by(user_id=user_id).first()
-    if perm_record and perm_record.permissions_matrix:
-        try:
-            matrix = json.loads(perm_record.permissions_matrix)
-            if module_name in matrix and matrix[module_name].get(permission_type) is True:
-                return True
-        except Exception:
-            pass
-
-    return False
 
 def handle_blueprint_check_access(uid, module_name):
-    """
-    Centralized blueprint token clearance helper function for single module lookups.
-    Updated to include persistent 'pending_requests' map across all project modules.
-    """
+    """Centralized permission lookup for a single module (view/create/update/delete)."""
     user = User.query.get(uid)
     if not user:
         return jsonify({"msg": "Context Error"}), 401
 
-    # Fetch any active pending access requests for this user and module from the database
     pending_records = PermissionRequest.query.filter_by(
-        user_id=uid,
-        module_name=module_name,
-        status='Pending'
+        user_id=uid, module_name=module_name, status='Pending'
     ).all()
-    
     pending_requests_map = {req.permission_type: "Pending" for req in pending_records}
 
     if user.role and user.role.strip().lower() == 'admin':
         return jsonify({
-            "view": True, 
-            "create": True, 
-            "update": True, 
-            "delete": False,
-            "pending_requests": pending_requests_map
+            "view": True, "create": True, "update": True, "delete": False,
+            "pending_requests": pending_requests_map,
         }), 200
 
-    # Mapped 'create' check to the 'update' baseline tier configuration layout
-    can_update = check_permission(uid, 'update', module_name)
+    # 'create' is mapped to the same 'update' tier
+    can_update = _permission_matrix_allows(user, 'update', module_name)
     permissions = {
-        "view": check_permission(uid, 'view', module_name),
+        "view": _permission_matrix_allows(user, 'view', module_name),
         "create": can_update,
         "update": can_update,
         "delete": False,
-        "pending_requests": pending_requests_map
+        "pending_requests": pending_requests_map,
     }
     return jsonify(permissions), 200
 
 
-
 def handle_blueprint_request_access(uid, module_name, data):
-    """
-    Centralized administrative tier elevation builder logic to process access upgrade requests.
-    """
     permission_type = data.get('permission_type', 'view')
-
     if permission_type not in ['view', 'create', 'update']:
         return jsonify({"error": "Invalid tier specified or tier is disabled."}), 400
 
     existing = PermissionRequest.query.filter_by(
-        user_id=uid,
-        module_name=module_name,
-        permission_type=permission_type,
-        status='Pending'
+        user_id=uid, module_name=module_name,
+        permission_type=permission_type, status='Pending'
     ).first()
-
     if existing:
         return jsonify({"message": f"An access request for the '{permission_type}' tier is already pending review."}), 200
 
     db.session.add(PermissionRequest(
-        user_id=uid,
-        module_name=module_name,
-        permission_type=permission_type,
-        status='Pending'
+        user_id=uid, module_name=module_name,
+        permission_type=permission_type, status='Pending'
     ))
     db.session.commit()
     return jsonify({"message": f"Access request for '{permission_type}' submitted successfully to the administrator."}), 201
 
 
 def handle_get_all_permissions(uid):
-    """
-    Centralized endpoint logic to fetch the full authorization matrix for a user in a single call.
-    Reduces network overhead by allowing the frontend React Global Context to store permissions locally.
-    """
+    """Full permission matrix for a user in one call, so the frontend can cache it."""
     user = User.query.get(uid)
     if not user:
         return jsonify({"msg": "User context not found"}), 404
 
-    # If the user is an administrator, return a full permission matrix for all operational workspaces
     if user.role and user.role.strip().lower() == 'admin':
         modules = [
-            'Payment Flow', 'Service', 'Site Visit', 'DCR', 
-            'Kseb', 'KSEB Registration & Completion', 'MNRE Profile', 
-            'Bank Loan', 'MNRE Installation', 'Material Delivery', 'Material Installation'
+            'Payment Flow', 'Service', 'Site Visit', 'DCR',
+            'Kseb', 'KSEB Registration & Completion', 'MNRE Profile',
+            'Bank Loan', 'MNRE Installation', 'Material Delivery',
+            'Material Installation', 'Complaints',
         ]
         admin_matrix = {mod: {"view": True, "create": True, "update": True, "delete": False} for mod in modules}
         return jsonify({"permissions_matrix": admin_matrix}), 200
 
-    # For standard staff accounts, retrieve the live permission registry from database records
     perm_record = UserPermission.query.filter_by(user_id=uid).first()
     if perm_record and perm_record.permissions_matrix:
         try:
@@ -158,16 +160,11 @@ def handle_get_all_permissions(uid):
         except Exception:
             pass
 
-    # Fallback default response: Empty dictionary if no matrix matches or mapping fails
     return jsonify({"permissions_matrix": {}}), 200
 
 
 def sanitize_path_segment(value):
-    """
-    Strips characters that would break a Cloudinary folder/file path (spaces,
-    slashes, and anything outside [A-Za-z0-9_-]). Used by every helper below
-    so folder and file names built from user-entered data stay filesystem-safe.
-    """
+    """Strips anything outside [A-Za-z0-9_-] so Cloudinary folder/file paths stay safe."""
     if value is None:
         return ""
     value = str(value).strip().replace(' ', '_')
@@ -175,60 +172,37 @@ def sanitize_path_segment(value):
 
 
 def get_customer_folder(customer_name, customer_id):
-    """
-    Builds the '{customer_name}_{customer_id}' folder segment used as the
-    top-level directory for a customer under 'lavenir/'.
-    """
     return f"{sanitize_path_segment(customer_name)}_{sanitize_path_segment(customer_id)}"
 
 
 def get_module_folder_path(customer_name, customer_id, module_name):
-    """
-    Builds the folder path for a given customer + module, e.g.:
-    lavenir/johndoe_1023/sitevisit
-    """
     customer_folder = get_customer_folder(customer_name, customer_id)
     module_segment = sanitize_path_segment(module_name)
     return f"lavenir/{customer_folder}/{module_segment}"
 
 
 def get_doc_filename(doctype, customer_id, ext):
-    """
-    Builds the stored document/image filename, e.g. 'adhar_1023.jpg'.
-    """
     ext = str(ext).lstrip('.')
     return f"{sanitize_path_segment(doctype)}_{sanitize_path_segment(customer_id)}.{ext}"
 
 
 def build_doc_path(customer_name, customer_id, module_name, doctype, ext):
     """
-    Centralized document/image path builder — the single source of truth for
-    where a customer document lives in Cloudinary storage.
-
-    Returns:
-        lavenir/{customer_name}_{customer_id}/{module_name}/{doctype}_{customer_id}.{ext}
-
-    Example:
-        build_doc_path("John Doe", 1023, "sitevisit", "adhar", "jpg")
-        -> "lavenir/JohnDoe_1023/sitevisit/adhar_1023.jpg"
+    lavenir/{customer_name}_{customer_id}/{module_name}/{doctype}_{customer_id}.{ext}
+    e.g. build_doc_path("John Doe", 1023, "sitevisit", "adhar", "jpg")
+         -> "lavenir/JohnDoe_1023/sitevisit/adhar_1023.jpg"
     """
     folder_path = get_module_folder_path(customer_name, customer_id, module_name)
     filename = get_doc_filename(doctype, customer_id, ext)
     return f"{folder_path}/{filename}"
 
 
-# ==========================================
-# NOTIFICATION-RULE HELPERS (added)
-# ==========================================
-
 def check_all_modules_complete(customer):
     """
-    Returns True only if every one of the 10 workflow modules for this
-    customer has work_done == 'Completed'.
-
-    `customer` is a CustomerProject instance. Uses the one-to-one/one-to-many
-    backrefs already defined on the model relationships — no extra queries
-    needed beyond what SQLAlchemy lazy-loads.
+    True only if all 10 workflow modules for this customer have
+    work_done == 'Completed'. site_visits/kseb_records are queried
+    explicitly ordered by created_at - the backref list order is not
+    guaranteed by SQLAlchemy.
     """
     def done(rel):
         if rel is None:
@@ -236,8 +210,14 @@ def check_all_modules_complete(customer):
         val = getattr(rel, 'work_done', None)
         return bool(val) and val.strip().lower() == 'completed'
 
-    latest_site_visit = customer.site_visits[-1] if customer.site_visits else None
-    latest_kseb = customer.kseb_records[-1] if customer.kseb_records else None
+    latest_site_visit = (
+        SiteVisit.query.filter_by(customer_project_id=customer.id)
+        .order_by(SiteVisit.created_at.desc()).first()
+    )
+    latest_kseb = (
+        KSEB.query.filter_by(customer_project_id=customer.id)
+        .order_by(KSEB.created_at.desc()).first()
+    )
 
     checks = [
         done(latest_site_visit),
@@ -255,5 +235,37 @@ def check_all_modules_complete(customer):
 
 
 def get_all_admin_ids():
-    """Returns the id list of every user with role == 'admin'."""
     return [u.id for u in User.query.filter_by(role='admin').all()]
+
+
+def get_users_with_permission(module_name, permission_type='view'):
+    return get_users_with_permission_multi([module_name], permission_type)
+
+
+def get_users_with_permission_multi(module_names, permission_type='update'):
+    """
+    2 queries total regardless of user/module count: admins are fetched
+    directly, every non-admin's permissions_matrix is fetched once and
+    checked in memory against all module_names. Avoids the old N+1 pattern
+    of calling check_permission() per user per module.
+    """
+    admin_ids = [u.id for u in User.query.filter_by(role='admin').all()]
+
+    target_ids = list(admin_ids)
+    non_admin_perms = (
+        UserPermission.query
+        .join(User, UserPermission.user_id == User.id)
+        .filter(db.or_(User.role.is_(None), User.role != 'admin'))
+        .all()
+    )
+    for perm in non_admin_perms:
+        if not perm.permissions_matrix:
+            continue
+        try:
+            matrix = json.loads(perm.permissions_matrix)
+        except Exception:
+            continue
+        if any(matrix.get(mod, {}).get(permission_type) is True for mod in module_names):
+            target_ids.append(perm.user_id)
+
+    return target_ids

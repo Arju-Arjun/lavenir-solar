@@ -7,14 +7,14 @@ const Kseb = ({ customerId }) => {
   const { role, permissions, refetchPermissions, isAdmin } = useAuth();
   
   const modulePermissions = useMemo(
-    () => isAdmin
+    () => isAdmin || role === 'admin'
       ? { view: true, create: true, update: true, delete: true }
-      : (permissions["KSEB Utility"] || permissions["KSEB"] || { view: false, create: false, update: false }),
-    [isAdmin, permissions]
+      : (permissions["KSEB Feasibility"] || permissions["KSEB"] || { view: false, create: false, update: false }),
+    [isAdmin, role, permissions]
   );
 
-  const canView = isAdmin || modulePermissions.view;
-  const canUpdate = isAdmin || modulePermissions.update;
+  const canView = isAdmin || role === 'admin' || modulePermissions.view;
+  const canUpdate = isAdmin || role === 'admin' || modulePermissions.update;
 
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -34,6 +34,7 @@ const Kseb = ({ customerId }) => {
     load_enhancement_status: "Pending",
     load_enhancement_comment: "",
     feasibility_status: "Pending",
+    comments: "",
     fee_paid: false
   });
 
@@ -51,6 +52,7 @@ const Kseb = ({ customerId }) => {
   }, [customerId]);
 
   const fetchAccessRequests = async () => {
+    setLoading(true);
     try {
       const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/kseb/check-access/`, {
         headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
@@ -62,16 +64,21 @@ const Kseb = ({ customerId }) => {
         }
         if (data.view || canView) {
           setAccessDenied(false);
-          fetchKsebDataset();
+          await fetchKsebDataset();
         } else {
           setAccessDenied(true);
+          setLoading(false);
         }
       } else if (res.status === 403) {
         setAccessDenied(true);
+        setLoading(false);
+      } else {
+        setLoading(false);
       }
     } catch (err) {
       console.error('Failed to verify access matrix privileges:', err);
       if (!canView) setAccessDenied(true);
+      setLoading(false);
     }
   };
 
@@ -106,6 +113,7 @@ const Kseb = ({ customerId }) => {
             load_enhancement_status: data.kseb.load_enhancement_status || "Pending",
             load_enhancement_comment: data.kseb.load_enhancement_comment || "",
             feasibility_status: data.kseb.feasibility_status || "Pending",
+            comments: data.kseb.comments || "",
             fee_paid: !!data.kseb.fee_paid
           });
         } else {
@@ -127,6 +135,7 @@ const Kseb = ({ customerId }) => {
       load_enhancement_status: "Pending",
       load_enhancement_comment: "",
       feasibility_status: "Pending",
+      comments: "",
       fee_paid: false
     });
   };
@@ -163,10 +172,16 @@ const Kseb = ({ customerId }) => {
   const handleInputChange = (e) => {
     if (!canUpdate) return;
     const { name, value, type, checked } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData((prev) => {
+      const updated = {
+        ...prev,
+        [name]: type === 'checkbox' ? checked : value
+      };
+      if (name === 'fee_paid' && !checked && updated.feasibility_status === 'Complete') {
+        updated.feasibility_status = 'Pending';
+      }
+      return updated;
+    });
   };
 
   const handleSaveClick = (e) => {
@@ -197,7 +212,7 @@ const Kseb = ({ customerId }) => {
       });
       if (response.ok) {
         setIsEditing(false);
-        fetchKsebDataset();
+        await fetchKsebDataset();
       } else {
         const errorData = await response.json();
         alert(errorData.error || "Failed to commit record updates.");
@@ -218,6 +233,7 @@ const Kseb = ({ customerId }) => {
         load_enhancement_status: ksebRecord.load_enhancement_status || "Pending",
         load_enhancement_comment: ksebRecord.load_enhancement_comment || "",
         feasibility_status: ksebRecord.feasibility_status || "Pending",
+        comments: ksebRecord.comments || "",
         fee_paid: !!ksebRecord.fee_paid
       });
     }
@@ -254,9 +270,9 @@ const Kseb = ({ customerId }) => {
       {!isEditing ? (
         <div className="site-details-deck">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px", marginBottom: "15px" }}>
-            <h2 className="workspace-pane-title" style={{ margin: 0 }}>KSEB FEASIBILITY Deatials</h2>
+            <h2 className="workspace-pane-title" style={{ margin: 0 }}>KSEB FEASIBILITY Details</h2>
             <div style={{ display: "flex", gap: "10px", marginLeft: "auto" }}>
-              {ksebRecord && !canUpdate && (
+              {!canUpdate && (
                 pendingRequests["update"] === "Pending" ? (
                   <span style={{ fontSize: "0.8rem", color: "#ca8a04", fontWeight: "600" }}>⚠️ Update Request Pending</span>
                 ) : (
@@ -285,7 +301,12 @@ const Kseb = ({ customerId }) => {
 
             <div className="detail-item-node">
               <span className="node-label">Feasibility Status:</span>
-              <span className="node-value">{ksebRecord?.feasibility_status || "Pending"}</span>
+              <span
+                className="node-value"
+                style={{ color: ksebRecord?.feasibility_status === 'Complete' ? '#10b981' : '#9ca3af', fontWeight: ksebRecord?.feasibility_status === 'Complete' ? 600 : 400 }}
+              >
+                {ksebRecord?.feasibility_status || "Pending"}
+              </span>
             </div>
 
             <div className="detail-item-node">
@@ -309,6 +330,11 @@ const Kseb = ({ customerId }) => {
               <p className="comments-text-display">{ksebRecord?.load_enhancement_comment || "No comments entered."}</p>
             </div>
           )}
+
+          <div className="text-narrative-block" style={{ marginTop: "12px" }}>
+              <label className="narrative-label">Comments</label>
+              <p className="comments-text-display">{ksebRecord?.comments || "No comments entered."}</p>
+          </div>
 
           <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px" }}>
             {canUpdate && (
@@ -345,10 +371,22 @@ const Kseb = ({ customerId }) => {
 
             <div className="form-group-element">
               <label>Feasibility Status *</label>
-              <select name="feasibility_status" value={formData.feasibility_status} onChange={handleInputChange} disabled={!canUpdate} className="control-select-dropdown">
+              <select
+                name="feasibility_status"
+                value={formData.feasibility_status}
+                onChange={handleInputChange}
+                disabled={!canUpdate || !formData.fee_paid}
+                className="control-select-dropdown"
+                style={!formData.fee_paid ? { color: "#9ca3af", backgroundColor: "#f3f4f6", cursor: "not-allowed" } : undefined}
+              >
                 <option value="Pending">Pending</option>
                 <option value="Complete">Complete</option>
               </select>
+              {!formData.fee_paid && (
+                <span style={{ fontSize: "0.75rem", color: "#9ca3af", marginTop: "4px", display: "block" }}>
+                  Mark fee as paid to enable Complete
+                </span>
+              )}
             </div>
           </div>
 
@@ -371,6 +409,11 @@ const Kseb = ({ customerId }) => {
               <input type="checkbox" name="fee_paid" checked={formData.fee_paid} onChange={handleInputChange} className="checkbox-input-element" disabled={!canUpdate} />
               <span className="checkbox-label-text">Fee Paid</span>
             </label>
+          </div>
+
+          <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
+            <label>Comments</label>
+            <textarea name="comments" value={formData.comments} onChange={handleInputChange} disabled={!canUpdate} rows="3" />
           </div>
 
           <div className="workspace-action-trigger-row center-aligned-row" style={{ marginTop: "20px" }}>

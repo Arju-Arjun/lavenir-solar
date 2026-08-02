@@ -1,13 +1,13 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, User, CustomerProject, SiteVisit, BankLoan, Payment, CustomerAuditLog, PermissionRequest
+from models import db, CustomerProject, SiteVisit, BankLoan, Payment, CustomerAuditLog
 from utils import (
-    check_permission, 
-    delete_cloudinary_file, 
-    handle_blueprint_check_access, 
+    check_permission,
+    delete_cloudinary_file,
+    handle_blueprint_check_access,
     handle_blueprint_request_access,
     get_module_folder_path,
-    sanitize_path_segment
+    sanitize_path_segment,
 )
 from datetime import datetime
 import cloudinary
@@ -17,15 +17,18 @@ import json
 payment_bp = Blueprint('payment_bp', __name__)
 
 MODULE_NAME = 'Payment Flow'
-# Folder segment used in the storage path (kept separate from MODULE_NAME
-# above, which is used for the permissions matrix and audit logs).
 FOLDER_MODULE_NAME = 'payment'
+
+# Below this, due_amount is treated as "fully settled" - money math on floats
+# rarely lands on an exact 0.0, so an equality check would silently never
+# mark a fully-paid record as Completed.
+DUE_AMOUNT_EPSILON = 0.01
+
 
 @payment_bp.route('/check-access/', methods=['GET'])
 @jwt_required()
 def check_access():
     uid = get_jwt_identity()
-    # Automatically pulls view/update permissions and active pending requests via utils.py
     return handle_blueprint_check_access(uid, MODULE_NAME)
 
 
@@ -41,12 +44,9 @@ def request_module_access():
 @jwt_required()
 def get_payment(customer_id):
     uid = get_jwt_identity()
-    user = User.query.get(uid)
-    
-    is_admin = user and user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not check_permission(uid, 'view', MODULE_NAME):
+    if not check_permission(uid, 'view', MODULE_NAME):
         return jsonify({"error": "Unauthorized access. View permissions missing."}), 403
-        
+
     cust = CustomerProject.query.filter_by(customer_id=customer_id).first()
     if not cust:
         return jsonify({"payment": None, "message": "Customer project record not found."}), 404
@@ -58,11 +58,11 @@ def get_payment(customer_id):
     loan_amount = float(bank_loan.total_loan_amount) if (bank_loan and bank_loan.need_loan and bank_loan.total_loan_amount) else 0.0
 
     payment = Payment.query.filter_by(customer_project_id=cust.id).first()
-    
+
     return jsonify({
         "payment": payment.to_dict() if payment else None,
         "project_cost": project_cost,
-        "loan_amount": loan_amount
+        "loan_amount": loan_amount,
     }), 200
 
 
@@ -70,22 +70,18 @@ def get_payment(customer_id):
 @jwt_required()
 def save_payment(customer_id):
     uid = get_jwt_identity()
-    user = User.query.get(uid)
-    is_admin = user and user.role and user.role.strip().lower() == 'admin'
+    if not check_permission(uid, 'update', MODULE_NAME):
+        return jsonify({"error": "Unauthorized permission tier clearance missing."}), 403
 
     cust = CustomerProject.query.filter_by(customer_id=customer_id).first()
     if not cust:
         return jsonify({"error": "Customer project record not found."}), 404
 
-    # Centralized storage folder for this customer + module, e.g.:
-    # lavenir/JohnDoe_1023/payment
+    # e.g. lavenir/JohnDoe_1023/payment
     folder_path = get_module_folder_path(cust.customer_name, cust.customer_id, FOLDER_MODULE_NAME)
 
     payment = Payment.query.filter_by(customer_project_id=cust.id).first()
     action = "UPDATE" if payment else "CREATE"
-    
-    if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
-        return jsonify({"error": "Unauthorized permission tier clearance missing."}), 403
 
     if not payment:
         payment = Payment(customer_project_id=cust.id, created_by=uid)
@@ -98,10 +94,15 @@ def save_payment(customer_id):
 
     bank_loan = BankLoan.query.filter_by(customer_project_id=cust.id).first()
     loan_amount = float(bank_loan.total_loan_amount) if (bank_loan and bank_loan.need_loan and bank_loan.total_loan_amount) else 0.0
-    
+
     if 'advance_amount' in request.form:
         old_val = float(payment.advance_amount or 0.0)
-        new_val = float(request.form.get('advance_amount') or 0.0)
+        try:
+            new_val = float(request.form.get('advance_amount') or 0.0)
+        except ValueError:
+            return jsonify({"error": "Invalid advance_amount value."}), 400
+        if new_val < 0:
+            return jsonify({"error": "advance_amount cannot be negative."}), 400
         payment.advance_amount = new_val
         if old_val != new_val:
             changes['advance_amount'] = {"old": old_val, "new": new_val}
@@ -118,7 +119,12 @@ def save_payment(customer_id):
 
     if 'second_payment' in request.form:
         old_val = float(payment.second_payment or 0.0)
-        new_val = float(request.form.get('second_payment') or 0.0)
+        try:
+            new_val = float(request.form.get('second_payment') or 0.0)
+        except ValueError:
+            return jsonify({"error": "Invalid second_payment value."}), 400
+        if new_val < 0:
+            return jsonify({"error": "second_payment cannot be negative."}), 400
         payment.second_payment = new_val
         if old_val != new_val:
             changes['second_payment'] = {"old": old_val, "new": new_val}
@@ -147,19 +153,35 @@ def save_payment(customer_id):
 
     if 'additional_payments' in request.form:
         old_val = payment.additional_payments
-        add_pay_data = json.loads(request.form.get('additional_payments') or '[]')
+        try:
+            old_parsed = json.loads(old_val) if old_val else []
+        except Exception:
+            old_parsed = []
+        try:
+            add_pay_data = json.loads(request.form.get('additional_payments') or '[]')
+            if not isinstance(add_pay_data, list):
+                raise ValueError("additional_payments must be a list")
+            for item in add_pay_data:
+                # Validates each row up front so a bad amount doesn't silently
+                # become 0 further down in the total_amount calculation.
+                float(item.get('amount', 0.0))
+        except Exception:
+            return jsonify({"error": "Invalid additional_payments payload."}), 400
         payment.additional_payments = json.dumps(add_pay_data)
-        if old_val != payment.additional_payments:
-            changes['additional_payments'] = {"old": old_val, "new": add_pay_data}
+        # Compare parsed values, not the raw strings, so re-serializing
+        # unchanged data (different key order/spacing) doesn't get logged
+        # as a spurious change.
+        if old_parsed != add_pay_data:
+            changes['additional_payments'] = {"old": old_parsed, "new": add_pay_data}
 
     try:
         parsed_additional = json.loads(payment.additional_payments or '[]')
     except Exception:
         parsed_additional = []
-        
+
     additional_total = sum(float(p.get('amount', 0.0)) for p in parsed_additional)
-    payment.total_amount_received = loan_amount + float(payment.advance_amount or 0) + float(payment.second_payment or 0) + additional_total
-    payment.due_amount = project_cost - payment.total_amount_received
+    payment.total_amount = loan_amount + float(payment.advance_amount or 0) + float(payment.second_payment or 0) + additional_total
+    payment.due_amount = project_cost - payment.total_amount
 
     current_proofs = []
     if payment.proof_file:
@@ -170,32 +192,45 @@ def save_payment(customer_id):
         except Exception:
             current_proofs = [payment.proof_file]
 
-    removed_urls = json.loads(request.form.get('removed_proofs', '[]'))
+    try:
+        removed_urls = json.loads(request.form.get('removed_proofs', '[]'))
+    except Exception:
+        removed_urls = []
+
     for target_url in removed_urls:
         if target_url in current_proofs:
-            delete_cloudinary_file(target_url, folder_path)
+            try:
+                delete_cloudinary_file(target_url, folder_path)
+            except Exception:
+                return jsonify({"error": "Failed to delete an existing proof file. Please try again."}), 502
             current_proofs.remove(target_url)
 
     uploaded_files = request.files.getlist('proof_files')
     new_uploads_tracked = []
-    # Continue numbering from where the existing proof list left off so each
-    # proof gets a unique public_id within the same module folder.
+    # Continue numbering from the existing proof list so each upload gets a
+    # unique public_id within the same module folder.
     start_index = len(current_proofs) + 1
     for i, file_obj in enumerate(uploaded_files):
         if file_obj and file_obj.filename != '':
             public_id = f"proof{start_index + i}_{sanitize_path_segment(cust.customer_id)}"
-            res = cloudinary.uploader.upload(
-                file_obj, folder=folder_path, public_id=public_id, overwrite=True
-            )
+            try:
+                res = cloudinary.uploader.upload(
+                    file_obj, folder=folder_path, public_id=public_id, overwrite=True
+                )
+            except Exception:
+                return jsonify({"error": "Failed to upload one of the proof files. Please try again."}), 502
             current_proofs.append(res['secure_url'])
             new_uploads_tracked.append(res['secure_url'])
 
     if new_uploads_tracked or removed_urls:
         changes['proof_files'] = {"added": new_uploads_tracked, "removed": removed_urls}
-        
+
     payment.proof_file = json.dumps(current_proofs)
 
-    if payment.due_amount == 0.0 and float(payment.advance_amount or 0) > 0 and float(payment.second_payment or 0) > 0 and payment.proof_file and len(current_proofs) > 0:
+    is_settled = abs(payment.due_amount) < DUE_AMOUNT_EPSILON
+    if (is_settled and float(payment.advance_amount or 0) > 0
+            and float(payment.second_payment or 0) > 0
+            and payment.proof_file and len(current_proofs) > 0):
         payment.work_done = 'Completed'
     else:
         payment.work_done = 'Pending'
@@ -209,7 +244,7 @@ def save_payment(customer_id):
             user_id=uid,
             action=action,
             module_name=MODULE_NAME,
-            changes_payload=json.dumps(changes if changes else {"initialized": True})
+            changes_payload=json.dumps(changes if changes else {"initialized": True}),
         )
         db.session.add(log)
 

@@ -1,11 +1,12 @@
 import re
 import json
+import threading
 from datetime import datetime
 import cloudinary
 import cloudinary.uploader
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from sqlalchemy import func, or_, and_
+from sqlalchemy import func, or_, and_, text
 from sqlalchemy.exc import IntegrityError
 from models import (db, CustomerProject, CustomerAuditLog, User, UserPermission, PermissionRequest,
                     BankLoan,
@@ -37,6 +38,112 @@ def delete_cloudinary_image(image_url):
         print(f"Cloudinary file removal skipped or failed: {str(e)}")
 
 
+# ==========================================
+# CUSTOMER DELETE — TRASH INSTEAD OF DESTROY (added)
+# ==========================================
+# Requirement: when a customer profile is deleted, every document/image
+# belonging to that customer across every module (site visit, payment, KSEB,
+# DCR, material delivery/installation, services, etc.) should NOT be
+# permanently destroyed on Cloudinary. Instead it should be moved into a
+# 'lavenir/trash/...' folder (created automatically by Cloudinary the first
+# time something is renamed into it — no separate setup needed) so it can
+# still be recovered later if needed.
+
+TRASH_FOLDER = "lavenir/trash"
+
+
+def move_cloudinary_to_trash(file_url):
+    """
+    Moves a single Cloudinary asset into TRASH_FOLDER instead of deleting it,
+    preserving its original folder structure underneath, e.g.:
+        lavenir/JohnDoe_1023/sitevisit/adhar_1023.jpg
+        -> lavenir/trash/JohnDoe_1023/sitevisit/adhar_1023.jpg
+    Returns the new secure_url on success, or None if nothing was moved.
+    """
+    if not file_url or "res.cloudinary.com" not in file_url or "sample.jpg" in file_url:
+        return None
+    try:
+        pattern = r"/upload/(?:v\d+/)?(.+)\.[a-zA-Z0-9]+$"
+        match = re.search(pattern, file_url)
+        if not match:
+            return None
+        public_id = match.group(1)
+
+        # Already sitting in trash (e.g. re-triggered delete) — leave it alone.
+        if public_id.startswith(TRASH_FOLDER + "/"):
+            return None
+
+        new_public_id = f"{TRASH_FOLDER}/{public_id}"
+        result = cloudinary.uploader.rename(public_id, new_public_id, overwrite=True)
+        print(f"Moved Cloudinary asset to trash: {public_id} -> {new_public_id}")
+        return result.get("secure_url")
+    except Exception as e:
+        print(f"Cloudinary trash-move skipped or failed for {file_url}: {str(e)}")
+        return None
+
+
+def _collect_json_list_urls(json_text, into):
+    if not json_text:
+        return
+    try:
+        parsed = json.loads(json_text)
+        if isinstance(parsed, list):
+            into.extend([u for u in parsed if u])
+    except Exception:
+        pass
+
+
+def collect_customer_cloudinary_urls(customer):
+    """
+    Walks every module attached to a CustomerProject and pulls out every
+    Cloudinary file/image URL stored on it. Must be called BEFORE the
+    customer row is deleted — once db.session.delete(customer) cascades,
+    these rows (and their URLs) are gone from the DB.
+    """
+    urls = []
+    if customer.profile_photo:
+        urls.append(customer.profile_photo)
+
+    for visit in customer.site_visits:
+        for field in ('quotation_file', 'agreement_file', 'aadhaar', 'pan',
+                      'kseb_bill', 'bank_passbook', 'land_tax',
+                      'building_tax', 'signature'):
+            value = getattr(visit, field, None)
+            if value:
+                urls.append(value)
+        _collect_json_list_urls(visit.images, urls)
+
+    if customer.mnre_profile_rel:
+        if customer.mnre_profile_rel.feasibility_file:
+            urls.append(customer.mnre_profile_rel.feasibility_file)
+        if customer.mnre_profile_rel.ack_file:
+            urls.append(customer.mnre_profile_rel.ack_file)
+
+    if customer.bank_loan_rel and customer.bank_loan_rel.acknowledgement_file:
+        urls.append(customer.bank_loan_rel.acknowledgement_file)
+
+    if customer.payment_rel and customer.payment_rel.proof_file:
+        urls.append(customer.payment_rel.proof_file)
+
+    if customer.dcr_certificate_rel and customer.dcr_certificate_rel.certificate_file:
+        urls.append(customer.dcr_certificate_rel.certificate_file)
+
+    for service in customer.services:
+        _collect_json_list_urls(service.images, urls)
+
+    if customer.material_delivery_rel:
+        if customer.material_delivery_rel.delivery_document:
+            urls.append(customer.material_delivery_rel.delivery_document)
+        _collect_json_list_urls(customer.material_delivery_rel.delivery_images, urls)
+
+    if customer.material_installation_rel:
+        if customer.material_installation_rel.installation_document:
+            urls.append(customer.material_installation_rel.installation_document)
+        _collect_json_list_urls(customer.material_installation_rel.installation_images, urls)
+
+    return urls
+
+
 CUSTOMER_PROFILE_MODULE = 'Customer Profile'
 
 PHONE_PATTERN = re.compile(r'^\d{10}$')
@@ -65,21 +172,28 @@ def check_staff_action_permission(user_id, role, tier_needed):
 
 def get_next_sl_no():
     """
-    Computes the next sl_no using MAX() + COALESCE instead of
-    ORDER BY sl_no DESC LIMIT 1.
+    Allocates the next sl_no from a Postgres sequence (customer_sl_no_seq)
+    instead of SELECT MAX(sl_no) + 1.
 
-    Why this matters: sl_no is unique but nullable, and autoincrement=True
-    on a non-primary-key column is not enforced by the database — only the
-    real PK (id) autoincrements. That means sl_no's value depends entirely
-    on this lookup. Several databases (Postgres included) sort NULLs FIRST
-    on DESC by default, so if any row ever has sl_no = NULL, the old
-    ORDER BY .. LIMIT 1 approach would return that NULL row as "last",
-    silently reset next_sl back to 1, and collide with the existing
-    sl_no=1 row on insert (IntegrityError -> uncaught -> 500).
-    MAX()/COALESCE is immune to that ordering issue.
+    Why: MAX()+1 is a read-then-write race. Two concurrent create_customer
+    requests can both read the same MAX before either commits, both compute
+    the same next_sl/customer_id, and the second insert's unique-constraint
+    flush() fails. The previous retry loop only got 2 attempts total, so
+    under any real concurrency (e.g. two staff adding customers around the
+    same time) this surfaced to the user as:
+    "Could not allocate a unique customer ID; please retry." (HTTP 409)
+
+    nextval() on a sequence is atomic at the DB level — Postgres guarantees
+    two concurrent callers never receive the same value, with no row
+    locking or retry logic required.
+
+    One-time setup (run once against the DB, e.g. via an Alembic migration):
+
+        CREATE SEQUENCE IF NOT EXISTS customer_sl_no_seq;
+        SELECT setval('customer_sl_no_seq',
+                       COALESCE((SELECT MAX(sl_no) FROM customer_projects), 0));
     """
-    max_sl_no = db.session.query(func.coalesce(func.max(CustomerProject.sl_no), 0)).scalar()
-    return max_sl_no + 1
+    return db.session.execute(text("SELECT nextval('customer_sl_no_seq')")).scalar()
 
 
 # ---------------------------------------------------------------------------
@@ -215,16 +329,63 @@ def create_customer():
                 break
 
         print(f"\n\n\n\n\n\n\n parsed_capacity: {parsed_capacity} \n\n\n\n\n\n\n")
-        default_site_visit = SiteVisit(
+        # ADDED (Option B): auto-create one "shell" status row per SINGLETON
+        # work module for every new customer, so the dashboard sees this
+        # customer as Pending in every module from day one instead of being
+        # invisible until someone fills in a real Payment/KSEB
+        # Registration/etc. form for them.
+        #
+        # Each row is created with its OWN model defaults left untouched
+        # (e.g. BankLoan.work_done still defaults to "Completed" since a loan
+        # isn't needed by default) — this only creates the row, it never
+        # changes what "pending" vs "complete" means for that module.
+        #
+        # DELIBERATELY EXCLUDED: Site Visit (SiteVisit) and KSEB (KSEB) —
+        # see the comment block just above this one for why a SiteVisit
+        # stub was removed already (it broke check_feasibility_delay's 30s/
+        # 20-day timer by starting it from customer *creation* instead of
+        # the real site visit). KSEB has the exact same shape - a one-to-many
+        # `kseb_records` log, not a per-customer singleton row - so it's
+        # excluded for the same reason: a synthetic KSEB entry would sit in
+        # that customer's KSEB history before any human ever touched it.
+        # Every module below IS a true one-row-per-customer singleton
+        # (uselist=False / unique=True on customer_project_id), so a stub
+        # here doesn't corrupt any history - it just marks "not started yet"
+        # the same way the customer profile itself already does.
+        db.session.add(MNREProfile(customer_project_id=new_customer.id, created_by=current_user_id))
+        db.session.add(MNREInstallation(customer_project_id=new_customer.id, created_by=current_user_id))
+        db.session.add(BankLoan(customer_project_id=new_customer.id, created_by=current_user_id))
+        db.session.add(Payment(customer_project_id=new_customer.id, created_by=current_user_id))
+        db.session.add(KsebRegistrationCompletion(customer_project_id=new_customer.id, created_by=current_user_id))
+        db.session.add(DCRCertificate(customer_project_id=new_customer.id, created_by=current_user_id))
+        db.session.add(MaterialDelivery(
             customer_project_id=new_customer.id,
-            panel_capacity=parsed_capacity,
-            system_capacity=parsed_capacity,
-            feasibility='Yes',
-            location=f"{place}, {district}",
             created_by=current_user_id,
-            updated_by=current_user_id
-        )
-        db.session.add(default_site_visit)
+            # delivery_date is NOT NULL with no column default, so a
+            # placeholder is unavoidable here. This does NOT mean delivery
+            # has happened - electrical_delivered / panel_delivered /
+            # structure_delivered / work_done all stay at their own
+            # defaults (False / "Pending"), which is what every
+            # delivery-related check in notification_rules.py actually
+            # reads (e.g. check_dcr_delay checks delivery.panel_delivered,
+            # not delivery_date).
+            delivery_date=datetime.utcnow().date(),
+        ))
+        db.session.add(MaterialInstallation(customer_project_id=new_customer.id, created_by=current_user_id))
+
+        # REMOVED: previously auto-created a `default_site_visit` SiteVisit
+        # row here, right at customer-creation time. That made
+        # check_feasibility_delay() (notification_rules.py) start its 30s/
+        # 20-day timer from customer *creation*, since it keys off
+        # SiteVisit.created_at of the latest site_visits row - not from when
+        # staff actually fill in and submit the real Site Visit form via
+        # save_site_visit() (site_visit.py), which only ever UPDATES this
+        # same row rather than creating a new one. Net effect: the
+        # "KSEB Feasibility Pending" alert fired almost immediately after a
+        # customer was created, before any real site visit had happened.
+        # Now no SiteVisit row exists until save_site_visit() creates the
+        # first one for real, so the feasibility-delay clock starts at the
+        # correct time.
 
         audit_payload = {
             "customer_name": customer_name,
@@ -247,7 +408,7 @@ def create_customer():
 
         return jsonify({
             "success": True,
-            "message": "Customer profile initialized and Site Visit mapped successfully!",
+            "message": "Customer profile created successfully!",
             "data": new_customer.to_dict()
         }), 201
 
@@ -643,8 +804,14 @@ def get_customers():
         serialized_records = []
         for customer in records:
             customer_dict = customer.to_dict()
+            
+            # Append work_done statuses
             for key, value in work_done_map.get(customer.id, {}).items():
                 customer_dict[f"{key}_work_done"] = value
+                
+            # ADD THIS LINE: Pass 'need_loan' to the frontend so the workflow diagram knows
+            customer_dict['need_loan'] = customer.bank_loan_rel.need_loan if customer.bank_loan_rel else False
+
             serialized_records.append(customer_dict)
 
         response = {
@@ -790,11 +957,33 @@ def delete_customer_profile(customer_id):
         if not check_staff_action_permission(user.id, user.role, 'delete'):
             return jsonify({"success": False, "message": "Security Error: Destructive access denied."}), 403
 
-        if customer.profile_photo:
-            delete_cloudinary_image(customer.profile_photo)
+        # Gather every document/image URL across ALL modules (site visit,
+        # payment, bank loan, MNRE, KSEB registration, DCR, material
+        # delivery/installation, services...) BEFORE deleting the customer —
+        # once db.session.delete(customer) cascades, those rows are gone.
+        file_urls = collect_customer_cloudinary_urls(customer)
 
+        # db.session.delete(customer) cascades to every related module row
+        # (site_visits, payment_rel, bank_loan_rel, kseb_records,
+        # kseb_registration_rel, dcr_certificate_rel, mnre_profile_rel,
+        # mnre_installation_rel, material_delivery_rel,
+        # material_installation_rel, services, audit_logs) because each of
+        # those relationships is declared with cascade="all, delete-orphan"
+        # in models.py.
         db.session.delete(customer)
         db.session.commit()
+
+        # Move the files to Cloudinary trash AFTER the DB commit succeeds,
+        # so a Cloudinary hiccup never blocks the actual customer deletion.
+        # Run it in a background thread so the HTTP response (and the
+        # frontend's "Processing..." spinner) doesn't wait on N network
+        # calls to Cloudinary — the DB delete is already committed at this
+        # point, so there's nothing left for the request to wait on.
+        if file_urls:
+            threading.Thread(
+                target=lambda urls=file_urls: [move_cloudinary_to_trash(u) for u in urls],
+                daemon=True
+            ).start()
 
         return jsonify({
             "success": True, 

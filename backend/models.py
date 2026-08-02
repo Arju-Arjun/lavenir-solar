@@ -1,19 +1,20 @@
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 db = SQLAlchemy()
+
 
 class User(db.Model):
     __tablename__ = 'users'
     
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(100), nullable=False)
-    role = db.Column(db.String(20), nullable=False)  # admin, staff
+    role = db.Column(db.String(20), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     phone_number = db.Column(db.String(20), nullable=True)
     password = db.Column(db.String(255), nullable=False)
-    profile_photo = db.Column(db.String(255), nullable=True, default="https://res.cloudinary.com/demo/image/upload/v1312461204/sample.jpg")
+    profile_photo = db.Column(db.String(255), nullable=True)
     admin_id = db.Column(db.String(50), unique=True, nullable=True)
     employee_id = db.Column(db.String(50), unique=True, nullable=True)
     department = db.Column(db.String(50), nullable=True)
@@ -51,6 +52,8 @@ class CustomerProject(db.Model):
     place = db.Column(db.String(100), nullable=False)
     capacity_kw = db.Column(db.Numeric(10, 2), nullable=False, default=0.00)
     project_status = db.Column(db.String(20), default='Active')
+
+    feasibility_notified_date = db.Column(db.Date, nullable=True)
     
     created_date = db.Column(db.DateTime, default=datetime.utcnow)
     last_updated = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -60,6 +63,13 @@ class CustomerProject(db.Model):
     maintenance_count = db.Column(db.Integer, default=0, nullable=False)
     last_maintenance_added_date = db.Column(db.DateTime, nullable=True)
 
+    # ADDED: set once (first time only) by check_first_maintenance_due() the
+    # moment check_all_modules_complete() first returns True for this
+    # customer. Anchors the "first maintenance due 6 months after everything
+    # is complete" countdown to a fixed point in time, so it doesn't drift if
+    # someone edits an already-complete module's fields later (which would
+    # bump that module's own updated_at).
+    modules_completed_at = db.Column(db.DateTime, nullable=True)
 
     def to_dict(self):
         return {
@@ -73,10 +83,12 @@ class CustomerProject(db.Model):
             "place": self.place,
             "capacity_kw": float(self.capacity_kw) if self.capacity_kw else 0.0,
             "project_status": self.project_status,
+            "feasibility_notified_date":self.feasibility_notified_date,
             "created_date": self.created_date.isoformat() if self.created_date else None,
             "last_updated": self.last_updated.isoformat() if self.last_updated else None,
             "maintenance_count": self.maintenance_count,
-            "last_maintenance_added_date": self.last_maintenance_added_date.isoformat() if self.last_maintenance_added_date else None
+            "last_maintenance_added_date": self.last_maintenance_added_date.isoformat() if self.last_maintenance_added_date else None,
+            "modules_completed_at": self.modules_completed_at.isoformat() if self.modules_completed_at else None
         }
 
 
@@ -85,9 +97,9 @@ class PermissionRequest(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    module_name = db.Column(db.String(50), nullable=False)           # 'Site Visit'
-    permission_type = db.Column(db.String(20), nullable=False)       # 'view', 'update', 'delete'
-    status = db.Column(db.String(20), default='Pending')            # 'Pending', 'Approved', 'Rejected'
+    module_name = db.Column(db.String(50), nullable=False)
+    permission_type = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), default='Pending')
     requested_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     user = db.relationship('User', backref=db.backref('permissions', lazy=True))
@@ -146,7 +158,7 @@ class SiteVisit(db.Model):
     wifi = db.Column(db.String(10), nullable=True, default='No')
     changes = db.Column(db.Text, nullable=True)
     
-    work_done = db.Column(db.String(30), default='Pending', nullable=False) # 'Not Initiated' or 'Completed'
+    work_done = db.Column(db.String(30), default='Pending', nullable=False)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -203,12 +215,10 @@ class MNREProfile(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
     
-    # MNRE Dynamic Parameters
-    enabled = db.Column(db.Boolean, default=False, nullable=False) # Handled by structural feasibility conditional hook
-    mnre_status = db.Column(db.String(50), default='Pending', nullable=False) # 'Pending', 'Completed'
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
+    mnre_status = db.Column(db.String(50), default='Pending', nullable=False)
     comments = db.Column(db.Text, nullable=True)
     
-    # System Target Verification Files
     feasibility_file = db.Column(db.String(255), nullable=True)
     ack_file = db.Column(db.String(255), nullable=True)
 
@@ -242,38 +252,30 @@ class MNREProfile(db.Model):
         }
 
 
-
 class MNREInstallation(db.Model):
     __tablename__ = 'mnre_installations'
 
     id = db.Column(db.Integer, primary_key=True)
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     
-    # --- Installation Trackers ---
     installation_status = db.Column(db.String(50), default='Pending', nullable=False) 
-    # Dropdown: Pending, Installation Scheduled, Installation in Progress, Completed, Partially Completed, On Hold
     installation_date = db.Column(db.Date, nullable=True)
     
     
-    # --- Approval Trackers ---
     approval_status = db.Column(db.String(50), default='Pending', nullable=False)
-    # Dropdown: Pending, Under Verification, Approved, Rejected, Returned for Correction
     approval_date = db.Column(db.Date, nullable=True)
    
     
-    # --- Subsidy Trackers ---
     subsidy_status = db.Column(db.String(50), default='Pending', nullable=False)
-    # Dropdown: Pending, Processing, Approved, Received, Failed, Returned
     subsidy_amount = db.Column(db.Numeric(12, 2), default=0.00, nullable=False)
     subsidy_received_date = db.Column(db.Date, nullable=True)
     comments = db.Column(db.Text, nullable=True)
 
-    # --- System Metadata Tracks ---
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    work_done = db.Column(db.String(30), default='Pending', nullable=False) # 'Not Initiated' or 'Completed'
+    work_done = db.Column(db.String(30), default='Pending', nullable=False)
 
     # ---- Added: relationship was missing, needed by check_all_modules_complete() ----
     customer = db.relationship('CustomerProject', backref=db.backref('mnre_installation_rel', cascade="all, delete-orphan", uselist=False, lazy=True))
@@ -294,37 +296,28 @@ class MNREInstallation(db.Model):
         }
 
 
-
-
-
 class BankLoan(db.Model):
     __tablename__ = 'bank_loans'
     
     id = db.Column(db.Integer, primary_key=True)
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     
-    # Core Loan Toggle State
     need_loan = db.Column(db.Boolean, default=False, nullable=False)
     
     
-    # Parameters
-    jansamarth_status = db.Column(db.String(30), default='Pending', nullable=False)  # 'Pending', 'Completed', 'Partially Done'
-    document_submission = db.Column(db.String(50), nullable=True) # 'By Hand', 'Mail', 'By Hand and Mail'
+    jansamarth_status = db.Column(db.String(30), default='Pending', nullable=False)
+    document_submission = db.Column(db.String(50), nullable=True)
     comment = db.Column(db.Text, nullable=True)
     
-    # Payments stored as dynamic installments JSON array: [{"label": "1st Payment", "amount": 25000.0}]
     loan_payments = db.Column(db.Text, nullable=False, default='[]')
     total_loan_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
     total_approved_loan_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
-    due_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)  # Computed field: total_approved_loan_amount - total_loan_amount
+    due_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
     
-    # File Attachment
     acknowledgement_file = db.Column(db.String(255), nullable=True)
     
-    # Workflow Progression Flag
-    work_done = db.Column(db.String(30), default='Completed', nullable=False) # 'Not Initiated' or 'Completed'
+    work_done = db.Column(db.String(30), default='Completed', nullable=False)
     
-    # Auditing
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -360,67 +353,60 @@ class BankLoan(db.Model):
         }
 
 
-
 class Payment(db.Model):
     __tablename__ = 'payments'
     
     id = db.Column(db.Integer, primary_key=True)
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     
-    # Core Payments
     advance_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
     advance_amount_date = db.Column(db.DateTime, nullable=True)
     
     second_payment = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
     second_payment_date = db.Column(db.DateTime, nullable=True)
     
-    # Dynamic Additional Payments array: [{"label": "3rd Payment", "amount": 15000.0, "date": "2026-03-15"}]
     additional_payments = db.Column(db.Text, nullable=False, default='[]')
     
-    # Meta / Audit Details
-    payment_method = db.Column(db.String(50), nullable=True) # 'Cash in Hand', 'Online', 'Cheque', or custom text string
+    payment_method = db.Column(db.String(50), nullable=True)
     comments = db.Column(db.Text, nullable=True)
-    proof_file =db.Column(db.Text)   # Holds path/url to uploaded image or PDF
+    proof_file =db.Column(db.Text)
     total_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
-    due_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)  # Computed field: project_cost - total_amount
+    due_amount = db.Column(db.Numeric(12, 2), nullable=False, default=0.00)
 
-    # Workflow Status
-    work_done = db.Column(db.String(30), default='Pending', nullable=False) # 'Pending' or 'Completed'
+    work_done = db.Column(db.String(30), default='Pending', nullable=False)
     
-    # Auditing
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
-    # Relationships
     customer = db.relationship('CustomerProject', backref=db.backref('payment_rel', cascade="all, delete-orphan", uselist=False, lazy=True))
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_payments')
     modifier = db.relationship('User', foreign_keys=[updated_by], backref='modified_payments')
 
     def to_dict(self):
-        # 1. Parse additional payments JSON
         try:
             parsed_additional = json.loads(self.additional_payments) if self.additional_payments else []
         except Exception:
             parsed_additional = []
             
-        # 2. Extract external values from joined relationships safely
         loan_amount = 0.0
-        if self.customer and self.customer.bank_loan_rel:
-            loan_amount = float(self.customer.bank_loan_rel.total_loan_amount)
+        if self.customer and self.customer.bank_loan_rel and self.customer.bank_loan_rel.need_loan:
+            loan_amount = float(self.customer.bank_loan_rel.total_loan_amount or 0.0)
             
+        # NOTE: fetch latest by created_at explicitly - list order on a
+        # backref with no order_by is not guaranteed by SQLAlchemy.
         project_cost = 0.0
-        # site_visits is a list backref in your SiteVisit model. Let's get the latest one if it exists.
-        if self.customer and self.customer.site_visits:
-            # Assumes the last site visit in the list contains the current project cost details
-            project_cost = float(self.customer.site_visits[-1].project_cost)
+        latest_visit = (
+            SiteVisit.query.filter_by(customer_project_id=self.customer_project_id)
+            .order_by(SiteVisit.created_at.desc()).first()
+        )
+        if latest_visit:
+            project_cost = float(latest_visit.project_cost)
 
-        # 3. Calculate running total amounts
         sum_additional = sum(float(p.get('amount', 0)) for p in parsed_additional)
         total_amount = float(self.advance_amount) + loan_amount + float(self.second_payment) + sum_additional
         
-        # 4. Calculate due balance
         due_amount = project_cost - total_amount
 
         return {
@@ -429,7 +415,6 @@ class Payment(db.Model):
             "customer_id": self.customer.customer_id if self.customer else None,
             "customer_name": self.customer.customer_name if self.customer else None,
             
-            # Formatted viewing fields
             "advance_amount": float(self.advance_amount),
             "advance_amount_date": self.advance_amount_date.isoformat() if self.advance_amount_date else None,
             "loan_amount": loan_amount,
@@ -437,12 +422,10 @@ class Payment(db.Model):
             "second_payment_date": self.second_payment_date.isoformat() if self.second_payment_date else None,
             "additional_payments": parsed_additional,
             
-            # Automatic mathematical calculation values
             "total_amount": total_amount,
             "project_cost": project_cost,
             "due_amount": due_amount,
             
-            # Attributes
             "payment_method": self.payment_method,
             "proof_file": self.proof_file,
             "work_done": self.work_done,
@@ -452,30 +435,34 @@ class Payment(db.Model):
         }
 
     
+
+
 class KSEB(db.Model):
     __tablename__ = 'kseb'
 
     id = db.Column(db.Integer, primary_key=True)
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
 
-    # Core KSEB specific operational attributes
     ownership_status = db.Column(db.String(50), nullable=True)
     ownership_comment = db.Column(db.Text, nullable=True)
 
     load_enhancement_status = db.Column(db.String(50), nullable=True)
     load_enhancement_comment = db.Column(db.Text, nullable=True)
 
-    feasibility_status = db.Column(db.String(50), default='pending', nullable=False)  # completed, pending, reject, partially done
+    feasibility_status = db.Column(db.String(50), default='pending', nullable=False)
     fee_paid = db.Column(db.Boolean, default=False, nullable=False)
 
-    # Auditing timestamps
+    comments = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
-    # Relationships
-    customer = db.relationship('CustomerProject', backref=db.backref('kseb_records', lazy=True))
+    # CHANGED: added cascade="all, delete-orphan" — without it, SQLAlchemy's
+    #   psycopg2.errors.NotNullViolation: null value in column
+    #   "customer_project_id" of relation "kseb" violates not-null constraint
+    # Every other module relationship below already had this cascade set —
+    customer = db.relationship('CustomerProject', backref=db.backref('kseb_records', cascade="all, delete-orphan", lazy=True))
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_kseb_records')
     modifier = db.relationship('User', foreign_keys=[updated_by], backref='modified_kseb_records')
     work_done = db.Column(db.String(50), default='pending', nullable=False)
@@ -488,6 +475,7 @@ class KSEB(db.Model):
             "customer_name": self.customer.customer_name if self.customer else None,
             "feasibility_status": self.feasibility_status,
             "fee_paid": self.fee_paid,
+            "comments": self.comments,
             "work_done": self.work_done,
             "ownership_status": getattr(self, 'ownership_status', None),
             "ownership_comment": getattr(self, 'ownership_comment', None),
@@ -497,51 +485,39 @@ class KSEB(db.Model):
         }
 
 
-
-
-
 class KsebRegistrationCompletion(db.Model):
     __tablename__ = 'kseb_registration_completion'
     
     id = db.Column(db.Integer, primary_key=True)
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     
-    # 1. Registration Submitted
     registration_submitted = db.Column(db.Boolean, default=False, nullable=False)
     registration_date = db.Column(db.DateTime, nullable=True)
     
-    # 2. Completion Submitted
     completion_submitted = db.Column(db.Boolean, default=False, nullable=False)
     completion_date = db.Column(db.DateTime, nullable=True)
     
-    # 3. Agreement Submitted
     agreement_submitted = db.Column(db.Boolean, default=False, nullable=False)
     agreement_date = db.Column(db.DateTime, nullable=True)
     
-    # 4. Payment Done
     payment_done = db.Column(db.Boolean, default=False, nullable=False)
     payment_date = db.Column(db.DateTime, nullable=True)
     
-    # 5. Plant Energized
     plant_energized = db.Column(db.Boolean, default=False, nullable=False)
     plant_energized_date = db.Column(db.DateTime, nullable=True)
 
-    # 6. WiFi Configured
     wifi_configured = db.Column(db.Boolean, default=False, nullable=False)
     wifi_configured_date = db.Column(db.DateTime, nullable=True)
     
-    # Comments & Miscellaneous
     comments = db.Column(db.Text, nullable=True)
 
-    work_done = db.Column(db.String(30), default='Pending', nullable=False) # 'Not Initiated' or 'Completed'
+    work_done = db.Column(db.String(30), default='Pending', nullable=False)
     
-    # Standard Auditing fields
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
-    # Relationships
     customer = db.relationship('CustomerProject', backref=db.backref('kseb_registration_rel', cascade="all, delete-orphan", uselist=False, lazy=True))
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_kseb_regs')
     modifier = db.relationship('User', foreign_keys=[updated_by], backref='modified_kseb_regs')
@@ -553,7 +529,6 @@ class KsebRegistrationCompletion(db.Model):
             "customer_id": self.customer.customer_id if self.customer else None,
             "customer_name": self.customer.customer_name if self.customer else None,
             
-            # Milestones and Ticks matching your exact Frontend state structure
             "registration_submitted": self.registration_submitted,
             "registration_date": self.registration_date.isoformat() if self.registration_date else None,
             
@@ -575,20 +550,9 @@ class KsebRegistrationCompletion(db.Model):
             "comments": self.comments,
             
             "work_done": self.work_done,
-            # Audit Data
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
-
-# DCR Certificate Received
-
-# Certificate Claimed
-
-# Certificate Sold / Transferred
-
-# Comments
-
-# DCR Certificate File
 
 
 class DCRCertificate(db.Model):
@@ -602,7 +566,7 @@ class DCRCertificate(db.Model):
     certificate_sold = db.Column(db.Boolean, default=False, nullable=False)
     comments = db.Column(db.Text, nullable=True)
     certificate_file = db.Column(db.String(255), nullable=True)
-    work_done = db.Column(db.String(30), default='Pending', nullable=False) # 'Not Initiated' or 'Completed'
+    work_done = db.Column(db.String(30), default='Pending', nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -629,9 +593,6 @@ class DCRCertificate(db.Model):
         }
 
 
-# service
-# Service Date,Service Type,Technician Name,Complaint / Issue,System Status,Parts Replaced,Next Service Due, image.Comments
-
 class Service(db.Model):
     __tablename__ = 'services'
     
@@ -639,14 +600,14 @@ class Service(db.Model):
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
     
     service_date = db.Column(db.DateTime, nullable=False)
-    service_type = db.Column(db.String(50), nullable=False)  # Maintenance, Repair, Inspection
+    service_type = db.Column(db.String(50), nullable=False)
     technician_name = db.Column(db.String(100), nullable=True)
     complaint_issue = db.Column(db.Text, nullable=True)
-    system_status = db.Column(db.String(50), nullable=True)  # Operational, Faulty, Needs Attention
-    parts_replaced = db.Column(db.Text, nullable=True)  # JSON string of parts replaced
+    system_status = db.Column(db.String(50), nullable=True)
+    parts_replaced = db.Column(db.Text, nullable=True)
     next_service_due = db.Column(db.DateTime, nullable=True)
     comments = db.Column(db.Text, nullable=True)
-    images= db.Column(db.Text, nullable=True)  # JSON string of image URLs or paths
+    images= db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -699,7 +660,6 @@ class MaterialDelivery(db.Model):
         nullable=False
     )
 
-    # General Information
     delivery_date = db.Column(db.Date, nullable=False)
 
     electrical_delivered = db.Column(db.Boolean, default=False, nullable=False)
@@ -710,7 +670,7 @@ class MaterialDelivery(db.Model):
     extra_material = db.Column(db.Text, nullable=True)
     structure_changes = db.Column(db.Text, nullable=True)
 
-    delivery_images = db.Column(db.Text, nullable=True)      # JSON
+    delivery_images = db.Column(db.Text, nullable=True)
     delivery_document = db.Column(db.String(255), nullable=True)
 
     delivered_by = db.Column(db.String(100), nullable=True)
@@ -756,7 +716,6 @@ class MaterialDelivery(db.Model):
         backref="modified_material_deliveries"
     )
 
-    # One Delivery -> Many Material Items
     material_items = db.relationship(
         "MaterialDeliveryItem",
         backref="delivery",
@@ -765,15 +724,6 @@ class MaterialDelivery(db.Model):
     )
 
 
-
-
-
-# 1. Electrical Installation (yes/no)
-# 2. Structure Installation (yes/no)
-# 3.installation_team(text)
-# 4.installation_completion_date(date)
-# 5.comments(text)
-# 6.showing table(use MaterialDeliveryItem table)
 class MaterialInstallation(db.Model):
     __tablename__ = "material_installations"
 
@@ -787,7 +737,7 @@ class MaterialInstallation(db.Model):
     installation_images = db.Column(db.Text, nullable=True)
     installation_document = db.Column(db.String(255), nullable=True)
 
-    work_done = db.Column(db.String(30), default="Pending", nullable=False)  # 'Not Initiated' or 'Completed'
+    work_done = db.Column(db.String(30), default="Pending", nullable=False)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
@@ -834,7 +784,9 @@ class MaterialDeliveryItem(db.Model):
 
     unit = db.Column(db.String(30), nullable=False)
 
-    quantity = db.Column(db.Float, nullable=False) #delivered_quantity
+    category = db.Column(db.String(20), nullable=False, default="Electrical")
+
+    quantity = db.Column(db.Float, nullable=False)
 
     used_quantity = db.Column(db.Float, nullable=True, default=0.0)
 
@@ -858,6 +810,173 @@ class MaterialDeliveryItem(db.Model):
     )
 
 
+class Complaint(db.Model):
+    """
+    Full rebuild of the complaints table (v2).
+
+    Changes from the old single-table design:
+      - attachments moved out of a JSON text column into their own table
+        (ComplaintAttachment) so a complaint can carry multiple files, each
+        with its own uploader/timestamp, and each can be deleted individually.
+      - a comment/reply thread (ComplaintComment) was added so staff (and
+        optionally the customer-facing side) can leave a running log of
+        updates on a complaint without overloading resolution_notes.
+      - SLA due-date tracking: sla_due_at is computed from priority at
+        creation time (and recomputed if priority changes while still open),
+        so overdue complaints can be queried/flagged.
+      - reopen_count tracks how many times a complaint has been reopened.
+
+    NOTE: this is a fresh table (no migration of old rows) - see the
+    accompanying migration note for dropping the old `complaints` table.
+    """
+    __tablename__ = 'complaints'
+
+    SLA_HOURS = {'Urgent': 4, 'High': 24, 'Medium': 72, 'Low': 120}
+
+    id = db.Column(db.Integer, primary_key=True)
+    complaint_number = db.Column(db.String(20), unique=True, nullable=False)
+
+    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
+
+    subject = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+
+    category = db.Column(db.String(30), nullable=False, default='Other')
+    priority = db.Column(db.String(10), nullable=False, default='Medium')
+
+    # independently afterwards - this is a note on the complaint itself, it
+    district_snapshot = db.Column(db.String(50), nullable=True)
+    place_snapshot = db.Column(db.String(100), nullable=True)
+
+    status = db.Column(db.String(20), nullable=False, default='Open')
+
+    resolution_notes = db.Column(db.Text, nullable=True)
+
+    assigned_to = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    closed_at = db.Column(db.DateTime, nullable=True)
+
+    sla_due_at = db.Column(db.DateTime, nullable=True)
+    reopen_count = db.Column(db.Integer, nullable=False, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    customer = db.relationship('CustomerProject', backref=db.backref('complaints', cascade="all, delete-orphan", lazy=True))
+    assignee = db.relationship('User', foreign_keys=[assigned_to], backref='assigned_complaints')
+    creator = db.relationship('User', foreign_keys=[created_by], backref='registered_complaints')
+    modifier = db.relationship('User', foreign_keys=[updated_by], backref='modified_complaints')
+
+    CLOSED_STATUSES = ('Resolved', 'Closed')
+
+    def compute_sla_due_at(self, from_time=None):
+        """Recompute sla_due_at from the current priority. Call this on
+        create, and again whenever priority changes on a still-open complaint."""
+        base = from_time or self.created_at or datetime.utcnow()
+        hours = self.SLA_HOURS.get(self.priority, self.SLA_HOURS['Medium'])
+        self.sla_due_at = base + timedelta(hours=hours)
+        return self.sla_due_at
+
+    @property
+    def is_overdue(self):
+        if self.status in self.CLOSED_STATUSES:
+            return False
+        if not self.sla_due_at:
+            return False
+        return datetime.utcnow() > self.sla_due_at
+
+    def to_dict(self):
+        attachments = sorted(self.attachments, key=lambda a: a.uploaded_at or datetime.min) if self.attachments else []
+        comments = sorted(self.comments, key=lambda c: c.created_at or datetime.min) if self.comments else []
+
+        return {
+            "id": self.id,
+            "complaint_number": self.complaint_number,
+            "customer_project_id": self.customer_project_id,
+            "customer_id": self.customer.customer_id if self.customer else None,
+            "customer_name": self.customer.customer_name if self.customer else None,
+            "customer_phone": self.customer.phone_number if self.customer else None,
+            "subject": self.subject,
+            "description": self.description,
+            "category": self.category,
+            "priority": self.priority,
+            "district_snapshot": self.district_snapshot,
+            "place_snapshot": self.place_snapshot,
+            "status": self.status,
+            "attachments": [a.to_dict() for a in attachments],
+            "comments": [c.to_dict() for c in comments],
+            "comments_count": len(comments),
+            "resolution_notes": self.resolution_notes,
+            "assigned_to": self.assigned_to,
+            "assigned_staff_name": self.assignee.full_name if self.assignee else None,
+            "created_by": self.created_by,
+            "created_by_name": self.creator.full_name if self.creator else None,
+            "sla_due_at": self.sla_due_at.isoformat() if self.sla_due_at else None,
+            "is_overdue": self.is_overdue,
+            "reopen_count": self.reopen_count,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class ComplaintAttachment(db.Model):
+    __tablename__ = 'complaint_attachments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    complaint_id = db.Column(db.Integer, db.ForeignKey('complaints.id', ondelete='CASCADE'), nullable=False)
+
+    file_url = db.Column(db.String(500), nullable=False)
+    file_name = db.Column(db.String(255), nullable=True)
+
+    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    complaint = db.relationship('Complaint', backref=db.backref('attachments', cascade="all, delete-orphan", passive_deletes=True, lazy=True))
+    uploader = db.relationship('User', foreign_keys=[uploaded_by])
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "complaint_id": self.complaint_id,
+            "file_url": self.file_url,
+            "file_name": self.file_name,
+            "uploaded_by": self.uploaded_by,
+            "uploaded_by_name": self.uploader.full_name if self.uploader else None,
+            "uploaded_at": self.uploaded_at.isoformat() if self.uploaded_at else None
+        }
+
+
+class ComplaintComment(db.Model):
+    __tablename__ = 'complaint_comments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    complaint_id = db.Column(db.Integer, db.ForeignKey('complaints.id', ondelete='CASCADE'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    message = db.Column(db.Text, nullable=False)
+    # Internal notes are staff-only remarks (e.g. investigation notes) as
+    is_internal = db.Column(db.Boolean, nullable=False, default=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    complaint = db.relationship('Complaint', backref=db.backref('comments', cascade="all, delete-orphan", passive_deletes=True, lazy=True))
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "complaint_id": self.complaint_id,
+            "user_id": self.user_id,
+            "user_name": self.user.full_name if self.user else None,
+            "message": self.message,
+            "is_internal": self.is_internal,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
 
 class CustomerAuditLog(db.Model):
     __tablename__ = 'customer_audit_logs'
@@ -866,8 +985,8 @@ class CustomerAuditLog(db.Model):
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
-    action = db.Column(db.String(50), nullable=False)  # CREATE, UPDATE, DELETE
-    module_name = db.Column(db.String(50), nullable=False)  # Site Visit
+    action = db.Column(db.String(50), nullable=False)
+    module_name = db.Column(db.String(50), nullable=False)
     changes_payload = db.Column(db.Text, nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -896,11 +1015,12 @@ class CustomerAuditLog(db.Model):
             "updated date and time": formatted_date_time
         }
 
+
 class PushSubscription(db.Model):
     __tablename__ = 'push_subscriptions'
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # nullable = anonymous subscribers allowed
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     endpoint = db.Column(db.String(500), unique=True, nullable=False)
     p256dh = db.Column(db.String(200), nullable=False)
     auth = db.Column(db.String(200), nullable=False)
@@ -920,21 +1040,36 @@ class PushSubscription(db.Model):
 class Notification(db.Model):
     __tablename__ = 'notifications'
 
+    # ADDED: composite index matching the exact filter+order pattern used by
+    # Without this, that query does a full table scan on every single check,
+    # sort column, so the index can serve both the filter and the ORDER BY.
+    __table_args__ = (
+        db.Index(
+            'ix_notifications_customer_notiftype_created',
+            'customer_project_id', 'notif_type', 'created_at'
+        ),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     title = db.Column(db.String(150), nullable=False)
     message = db.Column(db.Text, nullable=False)
     url = db.Column(db.String(255), nullable=True, default='/')
-    notif_type = db.Column(db.String(30), nullable=False, default='general')  # NEW: payment, staff, kseb, customer, general
+    notif_type = db.Column(db.String(30), nullable=False, default='general')
     is_read = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # ---- Added: links a notification back to the customer it's about, so
-    # the daily-cap check and click-through URL both have something solid to
-    # key off, instead of parsing the message/url strings. ----
-    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=True)
+    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id', ondelete='CASCADE'), nullable=True)
 
     user = db.relationship('User', backref=db.backref('notifications', cascade="all, delete-orphan", lazy=True))
+
+    # CHANGED (fix): customer_project_id had a ForeignKey column but no
+    # cascade instruction anywhere (ORM or DB) for what to do with a
+    #   psycopg2.errors.ForeignKeyViolation: update or delete on table
+    #   "customer_projects" violates foreign key constraint
+    # Every other module below already has this pattern (cascade="all,
+    customer = db.relationship('CustomerProject', backref=db.backref('customer_notifications', cascade="all, delete-orphan", passive_deletes=True, lazy=True))
 
     def to_dict(self):
         return {
@@ -944,6 +1079,6 @@ class Notification(db.Model):
             "url": self.url,
             "notif_type": self.notif_type,
             "is_read": self.is_read,
-            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,  # ADD 'Z'
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
             "customer_project_id": self.customer_project_id
         }

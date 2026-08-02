@@ -12,7 +12,7 @@ from utils import (
 kseb_bp = Blueprint('kseb_bp', __name__)
 
 # System core matrix validation key mapped strictly to target specification modules
-MODULE_NAME = 'KSEB Utility'
+MODULE_NAME = 'KSEB Feasibility'
 
 
 @kseb_bp.route('/check-access/', methods=['GET'])
@@ -82,8 +82,17 @@ def save_kseb(customer_id):
 
     data = request.get_json() or {}
     changes = {}
-    
-    for field in ['ownership_status', 'ownership_comment', 'load_enhancement_status', 'load_enhancement_comment', 'feasibility_status', 'fee_paid']:
+
+    # Feasibility can only be marked Complete once the fee has been paid.
+    # Resolve the effective values (incoming payload wins over the stored
+    # value) so this check works whether fee_paid/feasibility_status are
+    # being changed together or independently in this request.
+    effective_fee_paid = data.get('fee_paid', kseb_data.fee_paid)
+    effective_feasibility_status = data.get('feasibility_status', kseb_data.feasibility_status)
+    if effective_feasibility_status == 'Complete' and not effective_fee_paid:
+        return jsonify({"error": "Feasibility status can only be marked Complete after the fee has been paid."}), 400
+
+    for field in ['ownership_status', 'ownership_comment', 'load_enhancement_status', 'load_enhancement_comment', 'feasibility_status','comments', 'fee_paid']:
         if field in data:
             old_val = getattr(kseb_data, field)
             new_val = data[field]
