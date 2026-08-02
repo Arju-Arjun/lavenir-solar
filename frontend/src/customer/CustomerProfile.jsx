@@ -50,6 +50,21 @@ const VALID_TAB_IDS = new Set(PROFILE_TABS.map((t) => t.id));
 export default function CustomerProfile({ customerId }) {
   const [activeTab, setActiveTab] = useState('profile');
 
+  // GUARD: customerId should always be a bare id (e.g. "CUS013"), but if a
+  // notification link like /customer-profile/CUS013?tab=mnre-installation
+  // is opened and whatever routes to this component extracts the id via a
+  // naive path split (instead of a real route param), customerId can arrive
+  // here still carrying "?tab=mnre-installation" glued onto it. Every URL
+  // this component builds interpolates customerId directly, so an unclean
+  // value snowballs into double query strings the moment the user switches
+  // tabs, e.g. ".../CUS013?tab=mnre-installation?tab=site-visit".
+  //
+  // This strips it defensively so the component is safe either way, but the
+  // real fix belongs upstream: whatever parses the route/URL to produce this
+  // prop should be extracting only the path segment, not the query string.
+  const cleanCustomerId =
+    typeof customerId === 'string' ? customerId.split('?')[0] : customerId;
+
   // Keep activeTab in sync with the URL's ?tab= param — on first mount,
   // whenever the customer changes, and on browser back/forward.
   useEffect(() => {
@@ -61,22 +76,22 @@ export default function CustomerProfile({ customerId }) {
     parseTabFromUrl();
     window.addEventListener('popstate', parseTabFromUrl);
     return () => window.removeEventListener('popstate', parseTabFromUrl);
-  }, [customerId]);
+  }, [cleanCustomerId]);
 
   const handleTabChange = (tabId) => {
     setActiveTab(tabId);
-    window.history.pushState({}, '', `/customer-profile/${customerId}?tab=${tabId}`);
+    window.history.pushState({}, '', `/customer-profile/${cleanCustomerId}?tab=${tabId}`);
   };
 
   const ActiveComponent = TAB_COMPONENTS[activeTab];
   // Kseb also needs a projectId prop alongside customerId.
-  const extraProps = activeTab === 'kseb' ? { projectId: customerId } : {};
+  const extraProps = activeTab === 'kseb' ? { projectId: cleanCustomerId } : {};
 
   return (
     <div className="customer-profile-master-pane">
       <div className="profile-header-summary-card">
         <h2>Customer Info</h2>
-        <span className="meta-badge-id">Target Reference: {customerId || 'N/A'}</span>
+        <span className="meta-badge-id">Target Reference: {cleanCustomerId || 'N/A'}</span>
       </div>
 
       <div className="profile-tabs-navigation-bar">
@@ -92,7 +107,7 @@ export default function CustomerProfile({ customerId }) {
       </div>
 
       <div className="profile-tab-content-viewport">
-        {ActiveComponent && <ActiveComponent customerId={customerId} {...extraProps} />}
+        {ActiveComponent && <ActiveComponent customerId={cleanCustomerId} {...extraProps} />}
       </div>
     </div>
   );

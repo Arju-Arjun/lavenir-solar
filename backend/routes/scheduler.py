@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # *caught*, not hit to the second. Every other rule's gap is 5h+. 10 minutes
 # gives comfortable margin on all of them without hammering the DB with a
 # full customer x 11-check scan every 60s like the old test-mode interval did.
-CHECK_INTERVAL_MINUTES = int(os.getenv("NOTIFICATION_CHECK_INTERVAL_MINUTES", "10"))
+CHECK_INTERVAL_MINUTES = int(os.getenv("NOTIFICATION_CHECK_INTERVAL_MINUTES", "1"))
 
 # Set to "false" on every gunicorn/uwsgi worker except one in a multi-worker
 # deployment, so the job isn't scheduled (and doesn't fire duplicate

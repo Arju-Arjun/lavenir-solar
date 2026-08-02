@@ -3,12 +3,16 @@ Centralized notification business rules for maintenance service workflow
 and KSEB feasibility tracking.
 
 All delays/gaps below are PRODUCTION values. Flip TESTING_MODE to True to
-compress the flat delay/gap checks (registration, DCR, material, install,
-MNRE, complaints, fee, material usage) down to ~30s for manual testing.
-TESTING_MODE does NOT affect the 6-month maintenance reminders or the
-9-day feasibility ramp — those are date-based (relativedelta), not simple
-second offsets, so edit FIRST_MAINTENANCE_DUE_MONTHS / RENEWAL_DUE_MONTHS /
-FEASIBILITY_TRIGGER_DAYS directly if you need to fast-test them.
+compress EVERY delay/gap/lead-time in this file — including the 6-month
+maintenance reminders and the 9-day feasibility ramp — down to ~30s for
+manual testing. The 8 AM-12 PM / 8 AM-midnight IST send windows are also
+bypassed (treated as 0-24) under TESTING_MODE, so test notifications aren't
+blocked by time of day.
+
+Flip TESTING_MODE back to False before deploying — the real month/day
+values (FIRST_MAINTENANCE_DUE_MONTHS, RENEWAL_DUE_MONTHS,
+FEASIBILITY_TRIGGER_DAYS, DUE_REMINDER_LEAD_DAYS, DUE_REMINDER_FINAL_DAYS,
+the 8 AM windows) are untouched in code and take over automatically.
 """
 
 from datetime import datetime, timedelta, date
@@ -21,7 +25,7 @@ from routes.push import create_notification_and_push
 # ---------------------------------------------------------------------------
 # TESTING TOGGLE
 # ---------------------------------------------------------------------------
-TESTING_MODE = False
+TESTING_MODE = True
 _FAST_DELAY_SECONDS = 30
 _FAST_GAP_SECONDS = 30
 
@@ -91,18 +95,28 @@ FIRST_MAINTENANCE_DUE_MONTHS = 6
 RENEWAL_DUE_MONTHS = 6
 DUE_REMINDER_LEAD_DAYS = 7
 DUE_REMINDER_FINAL_DAYS = 2
-DUE_REMINDER_NORMAL_GAP_SECONDS = 20 * 3600   # ~20h -> reliably 1 send/day inside any daily window below 20h wide
-DUE_REMINDER_WINDOW_START_HOUR = 8            # 8 AM IST
-DUE_REMINDER_WINDOW_END_HOUR = 12             # 12 PM (noon) IST
+DUE_REMINDER_WINDOW_START_HOUR = 0 if TESTING_MODE else 8    # 8 AM IST (bypassed to all-day under TESTING_MODE)
+DUE_REMINDER_WINDOW_END_HOUR = 24 if TESTING_MODE else 12    # 12 PM noon IST (bypassed to all-day under TESTING_MODE)
+
+# TESTING_MODE-aware versions of the above: production keeps the real
+# month/day values via relativedelta/timedelta; testing collapses every one
+# of them to _FAST_DELAY_SECONDS/_FAST_GAP_SECONDS (30s) so due dates, lead
+# times, and repeat gaps are all testable within seconds instead of months.
+MAINTENANCE_DUE_OFFSET = timedelta(seconds=_FAST_DELAY_SECONDS) if TESTING_MODE else relativedelta(months=FIRST_MAINTENANCE_DUE_MONTHS)
+RENEWAL_DUE_OFFSET = timedelta(seconds=_FAST_DELAY_SECONDS) if TESTING_MODE else relativedelta(months=RENEWAL_DUE_MONTHS)
+DUE_REMINDER_LEAD_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else DUE_REMINDER_LEAD_DAYS * 86400
+DUE_REMINDER_FINAL_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else DUE_REMINDER_FINAL_DAYS * 86400
+DUE_REMINDER_NORMAL_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 20 * 3600   # ~20h -> reliably 1 send/day inside any daily window below 20h wide
 
 # ---- 3. KSEB feasibility delay (site visit created -> feasibility pending) ----
 # Starts firing 9 days after the site visit is created, then reuses the
 # exact same lead/final-day ramp as #1/#2 above (see check_feasibility_delay)
 # but against the GENERAL 8 AM-midnight window, not the narrow 8-12 one.
 FEASIBILITY_TRIGGER_DAYS = 9
+FEASIBILITY_TRIGGER_OFFSET = timedelta(seconds=_FAST_DELAY_SECONDS) if TESTING_MODE else timedelta(days=FEASIBILITY_TRIGGER_DAYS)
 
 # ---- 4. KSEB registration delay (feasibility complete -> registration not submitted) ----
-REGISTRATION_DELAY_DELAY_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else 12 * 3600
+REGISTRATION_DELAY_DELAY_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else 20 * 86400
 REGISTRATION_DELAY_REPEAT_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 5 * 3600
 
 # ---- 5. KSEB registration fee pending (registration submitted -> fee unpaid) ----
@@ -137,8 +151,8 @@ COMPLAINT_PENDING_REPEAT_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 2 
 # GENERAL NOTIFICATION WINDOW (Admins should only be pinged 8 AM - midnight IST)
 # ---------------------------------------------------------------------------
 NOTIFICATION_WINDOW_TZ = ZoneInfo("Asia/Kolkata")
-NOTIFICATION_WINDOW_START_HOUR = 8   # 8:00 AM IST
-NOTIFICATION_WINDOW_END_HOUR = 21    # 12:00 AM IST / midnight (next day, exclusive)
+NOTIFICATION_WINDOW_START_HOUR = 0 if TESTING_MODE else 8   # 8:00 AM IST (bypassed to all-day under TESTING_MODE)
+NOTIFICATION_WINDOW_END_HOUR = 24    # 12:00 AM IST / midnight (next day, exclusive)
 
 
 # ===========================================================================
@@ -285,44 +299,50 @@ def notify_users_by_role(role_name, title, body, url="/"):
 
 
 def check_due_date_reminder(customer, notif_type, due_date, title, body,
-                             lead_days=DUE_REMINDER_LEAD_DAYS,
-                             final_days=DUE_REMINDER_FINAL_DAYS,
+                             lead_seconds=DUE_REMINDER_LEAD_SECONDS,
+                             final_seconds=DUE_REMINDER_FINAL_SECONDS,
                              window_start_hour=DUE_REMINDER_WINDOW_START_HOUR,
                              window_end_hour=DUE_REMINDER_WINDOW_END_HOUR):
     """
-    Shared "N days before due date" reminder cadence, used by
+    Shared "N [days|seconds] before due date" reminder cadence, used by
     check_first_maintenance_due, check_maintenance_renewal_due, and
     check_feasibility_delay.
 
-    - Starts `lead_days` before `due_date`.
-    - Sends once/day while more than `final_days` away from `due_date`.
-    - Ramps to twice/day once inside the final `final_days` window, and
+    - Starts `lead_seconds` before `due_date`.
+    - Sends once/day (DUE_REMINDER_NORMAL_GAP_SECONDS) while more than
+      `final_seconds` away from `due_date`.
+    - Ramps to twice/day once inside the final `final_seconds` window, and
       stays at twice/day for as long as it remains overdue afterwards
-      (days_to_due goes negative, which is still <= final_days).
+      (seconds_to_due goes negative, which is still <= final_seconds).
     - Only ever sends inside the [window_start_hour, window_end_hour) IST
       window. The "twice/day" gap is derived from the window's own width
       (half the window, so both sends land inside it) rather than a fixed
       number, so this works correctly whether it's called with the narrow
       8-12 window (maintenance reminders) or the general 8-24 window
-      (feasibility).
+      (feasibility). Under TESTING_MODE both windows collapse to 0-24 and
+      lead/final collapse to _FAST_DELAY_SECONDS, so the urgent gap falls
+      back to _FAST_GAP_SECONDS instead of a window-derived value.
     """
     if not due_date:
         return
 
     now = datetime.utcnow()
-    reminder_start = due_date - timedelta(days=lead_days)
+    reminder_start = due_date - timedelta(seconds=lead_seconds)
     if now < reminder_start:
         return  # too early, not yet in the reminder period
 
     if not _is_within_hour_window(window_start_hour, window_end_hour):
         return
 
-    days_to_due = (due_date - now).total_seconds() / 86400.0
-    urgent = days_to_due <= final_days
+    seconds_to_due = (due_date - now).total_seconds()
+    urgent = seconds_to_due <= final_seconds
 
     if urgent:
-        window_hours = max(1, window_end_hour - window_start_hour)
-        gap_seconds = max(1, window_hours // 2) * 3600
+        if TESTING_MODE:
+            gap_seconds = _FAST_GAP_SECONDS
+        else:
+            window_hours = max(1, window_end_hour - window_start_hour)
+            gap_seconds = max(1, window_hours // 2) * 3600
     else:
         gap_seconds = DUE_REMINDER_NORMAL_GAP_SECONDS
 
@@ -372,7 +392,7 @@ def check_first_maintenance_due(customer):
         customer.modules_completed_at = datetime.utcnow()
         db.session.commit()
 
-    due_date = customer.modules_completed_at + relativedelta(months=FIRST_MAINTENANCE_DUE_MONTHS)
+    due_date = customer.modules_completed_at + MAINTENANCE_DUE_OFFSET
     overdue = datetime.utcnow() >= due_date
 
     check_due_date_reminder(
@@ -406,7 +426,7 @@ def check_maintenance_renewal_due(customer):
             )
         return
 
-    due_date = last_maintenance_date + relativedelta(months=RENEWAL_DUE_MONTHS)
+    due_date = last_maintenance_date + RENEWAL_DUE_OFFSET
     overdue = datetime.utcnow() >= due_date
 
     check_due_date_reminder(
@@ -455,8 +475,8 @@ def check_feasibility_delay(customer):
     if latest_kseb and latest_kseb.feasibility_status == 'Complete':
         return  # done, no more nudges
 
-    trigger_date = latest_visit.created_at + timedelta(days=FEASIBILITY_TRIGGER_DAYS)
-    synthetic_due_date = trigger_date + timedelta(days=DUE_REMINDER_LEAD_DAYS)
+    trigger_date = latest_visit.created_at + FEASIBILITY_TRIGGER_OFFSET
+    synthetic_due_date = trigger_date + timedelta(seconds=DUE_REMINDER_LEAD_SECONDS)
 
     check_due_date_reminder(
         customer,

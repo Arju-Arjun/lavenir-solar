@@ -282,8 +282,8 @@ def update_service(service_id):
                     changes['service_date'] = {"old": old_str, "new": new_str}
                     service.service_date = new_date_obj
                     
-                    # Recalculate next due automatically (+1 day for testing)
-                    new_next_due = new_date_obj + timedelta(days=1)
+                    # Recalculate next due automatically (+180 days for maintenance)
+                    new_next_due = new_date_obj + timedelta(days=180)
                     old_next_due = service.next_service_due
                     old_next_str = old_next_due.strftime("%Y-%m-%d") if old_next_due else None
                     new_next_str = new_next_due.strftime("%Y-%m-%d")

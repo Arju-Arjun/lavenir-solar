@@ -4,7 +4,7 @@ from sqlalchemy.orm import joinedload
 from models import MaterialDeliveryItem, MaterialDelivery, CustomerProject, User, CustomerAuditLog, db
 from datetime import datetime
 import json
-from utils import permission_allows_for_user
+from utils import check_permission
 
 material_item_bp = Blueprint('material_item', __name__)
 MODULE_NAME = 'Material Installation'  # Shared tracking module context
@@ -37,7 +37,7 @@ def get_delivery_items(customer_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not permission_allows_for_user(user, 'view', 'Material Delivery'):
+    if not is_admin and not check_permission(uid, 'view', 'Material Delivery'):
         return jsonify({"error": "Unauthorized view access parameters."}), 403
 
     customer_project = CustomerProject.query.filter_by(customer_id=customer_id).first()
@@ -56,7 +56,7 @@ def update_item_usage(item_id):
         return jsonify({"msg": "Context Error"}), 401
 
     is_admin = user.role and user.role.strip().lower() == 'admin'
-    if not is_admin and not permission_allows_for_user(user, 'update', MODULE_NAME):
+    if not is_admin and not check_permission(uid, 'update', MODULE_NAME):
         return jsonify({"error": "Unauthorized modification clearance."}), 403
 
     data = request.get_json() or {}

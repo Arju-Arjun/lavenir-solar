@@ -112,7 +112,7 @@ def handle_blueprint_check_access(uid, module_name):
 
     if user.role and user.role.strip().lower() == 'admin':
         return jsonify({
-            "view": True, "create": True, "update": True, "delete": False,
+            "view": True, "create": True, "update": True, "delete": True,
             "pending_requests": pending_requests_map,
         }), 200
 
@@ -122,7 +122,7 @@ def handle_blueprint_check_access(uid, module_name):
         "view": _permission_matrix_allows(user, 'view', module_name),
         "create": can_update,
         "update": can_update,
-        "delete": False,
+        "delete": _permission_matrix_allows(user, 'delete', module_name),
         "pending_requests": pending_requests_map,
     }
     return jsonify(permissions), 200
@@ -161,7 +161,7 @@ def handle_get_all_permissions(uid):
             'Bank Loan', 'MNRE Installation', 'Material Delivery',
             'Material Installation', 'Complaints',
         ]
-        admin_matrix = {mod: {"view": True, "create": True, "update": True, "delete": False} for mod in modules}
+        admin_matrix = {mod: {"view": True, "create": True, "update": True, "delete": True} for mod in modules}
         return jsonify({"permissions_matrix": admin_matrix}), 200
 
     perm_record = UserPermission.query.filter_by(user_id=uid).first()
