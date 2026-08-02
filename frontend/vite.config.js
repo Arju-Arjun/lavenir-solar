@@ -20,9 +20,9 @@ export default defineConfig(({ mode }) => {
         },
         includeAssets: ['favicon/favicon.ico', 'favicon/apple-touch-icon.png'],
         manifest: {
-          name: 'Solar Project',
-          short_name: 'Solar',
-          description: 'Your solar project app',
+          name: 'Lavenir Solar',
+          short_name: 'Lavenir Solar',
+          description: 'A web app for managing solar workflows.',
           theme_color: '#ffffff',
           background_color: '#ffffff',
           display: 'standalone',
