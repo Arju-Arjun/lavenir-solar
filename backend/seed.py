@@ -1,3 +1,4 @@
+import os
 from decimal import Decimal
 from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash
@@ -335,27 +336,76 @@ def print_kseb_data():
                         print(row)
                         continue
             print(data)
-# drop all tables and data include cludinary files
 def drop_all_tables_and_data():
     with app.app_context():
-        # Drop all tables in the database
         db.drop_all()
         db.session.commit()
-        print("All tables dropped successfully.")
-
-        # Optionally, you can also clear Cloudinary files if needed.
-        # This requires Cloudinary API credentials and proper setup.
-        # Uncomment the following lines if you want to clear Cloudinary files.
-        # import cloudinary
-        # import cloudinary.api
-        # cloudinary.api.delete_resources_by_prefix('your_folder_prefix')
-        # print("Cloudinary files cleared successfully.")
+        db.create_all()
+        db.session.commit()
+        print("All tables dropped successfully and the schema was recreated.")
 
 
+def delete_all_cloudinary_files():
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
+    api_key = os.getenv("CLOUDINARY_API_KEY")
+    api_secret = os.getenv("CLOUDINARY_API_SECRET")
 
+    if not all([cloud_name, api_key, api_secret]):
+        print("Cloudinary credentials not configured. Skipping Cloudinary cleanup.")
+        return
+
+    try:
+        import cloudinary
+        import cloudinary.api
+    except ImportError:
+        print("cloudinary package is not installed. Skipping Cloudinary cleanup.")
+        return
+
+    cloudinary.config(
+        cloud_name=cloud_name,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+
+    try:
+        result = cloudinary.api.delete_resources_by_prefix('seed-cleanup')
+        print("Cloudinary cleanup completed successfully.")
+        print(result)
+    except Exception as e:
+        print(f"Cloudinary cleanup skipped: {e}")
+
+
+
+
+# create admin user
+def create_admin_user():
+    with app.app_context():
+        # Ensure the schema exists before querying or inserting users.
+        db.create_all()
+        db.session.commit()
+
+        # Check if an admin user already exists
+        existing_admin = User.query.filter_by(role='admin').first()
+        if existing_admin:
+            print("Admin user already exists. Skipping creation.")
+            return
+
+        # Create a new admin user
+        admin_user = User(
+            full_name="vysakhmurali",
+            role="admin",
+            email="vysakhmurali768@gmail.com",
+            password=generate_password_hash("admin123"),
+        )
+        db.session.add(admin_user)
+        db.session.commit()
+        print("Admin user created successfully.")
 
 if __name__ == '__main__':
     # run()
     # print_kseb_data()
     # pass
-    ensure_modules_completed_at_column()
+    # ensure_modules_completed_at_column()
+    delete_all_cloudinary_files()  # Call the function to delete all Cloudinary files
+    drop_all_tables_and_data()  # Call the function to drop all tables and data
+    create_admin_user()  # Call the function to create an admin user
