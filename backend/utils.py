@@ -1,37 +1,49 @@
 import json
 import re
 import os
-import smtplib
-from email.mime.text import MIMEText
+import requests
 import cloudinary.uploader
 from models import db, User, UserPermission, PermissionRequest, SiteVisit, KSEB
 from flask import jsonify
 
 
 def send_reset_email(to_email, reset_link):
-    smtp_server = os.getenv('SMTP_SERVER')
-    smtp_port = int(os.getenv('SMTP_PORT', 587))
-    username = os.getenv('MAIL_USERNAME')
-    password = os.getenv('SMTP_PASSWORD')
-    use_tls = os.getenv('MAIL_USE_TLS', 'True') == 'True'
+    """
+    Sends the password-reset email via the Brevo transactional email HTTP
+    API instead of raw SMTP. Render blocks outbound SMTP ports (25/465/587)
+    on its free tier, which caused smtplib.SMTP() to hang indefinitely and
+    eventually get the gunicorn worker SIGKILLed on WORKER TIMEOUT. This is
+    a plain HTTPS call (port 443), so it isn't affected by that block, and
+    the explicit timeout means a failure raises a normal exception quickly
+    instead of hanging the worker.
 
-    msg = MIMEText(
-        f"Hello,\n\nWe received a request to reset your password.\n\n"
-        f"Click the link below to set a new password (valid for 15 minutes):\n{reset_link}\n\n"
-        f"If you didn't request this, you can safely ignore this email."
+    MAIL_FROM must be a sender address verified in the Brevo dashboard
+    (Senders, Domains & Dedicated IPs -> Senders -> Add a sender) - it does
+    not require owning/verifying a full domain.
+    """
+    api_key = os.getenv('BREVO_API_KEY')
+    from_email = os.getenv('MAIL_FROM')
+
+    response = requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        json={
+            "sender": {"email": from_email, "name": "Lavenir Solar"},
+            "to": [{"email": to_email}],
+            "subject": "Password Reset Request - Lavenir Solar",
+            "textContent": (
+                f"Hello,\n\nWe received a request to reset your password.\n\n"
+                f"Click the link below to set a new password (valid for 15 minutes):\n{reset_link}\n\n"
+                f"If you didn't request this, you can safely ignore this email."
+            ),
+        },
+        timeout=10,
     )
-    msg['Subject'] = 'Password Reset Request - Lavenir Solar '
-    msg['From'] = username
-    msg['To'] = to_email
-
-    server = smtplib.SMTP(smtp_server, smtp_port)
-    try:
-        if use_tls:
-            server.starttls()
-        server.login(username, password)
-        server.sendmail(username, to_email, msg.as_string())
-    finally:
-        server.quit()
+    response.raise_for_status()
 
 
 def delete_cloudinary_file(file_url, folder_path):
