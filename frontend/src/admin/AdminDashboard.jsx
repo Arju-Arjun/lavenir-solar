@@ -31,9 +31,15 @@ const DEFAULT_VISIBLE_LINES = {
   cumulative_capacity_kw: false,
 };
 
-function MetricCard({ icon: Icon, accentClass, label, value, sub }) {
+function MetricCard({ icon: Icon, accentClass, label, value, sub, onClick }) {
   return (
-    <div className="metric-card">
+    <div
+      className={`metric-card${onClick ? ' metric-card-clickable' : ''}`}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      style={onClick ? { cursor: 'pointer' } : undefined}
+    >
       <div className={`metric-card-icon ${accentClass}`}>
         <Icon size={22} />
       </div>
@@ -121,22 +127,26 @@ function EmptyState({ message }) {
   );
 }
 
-function KsebRegistrationAlertList({ alerts }) {
+function KsebRegistrationAlertList({ alerts, navigateTo }) {
   if (alerts === null) return null;
   if (!alerts) return <ListLoader />;
   if (alerts.length === 0) return <EmptyState message="No pending KSEB registrations right now." />;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+    <div id="kseb-registration-container" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       {alerts.map((alert) => (
         <div
           key={alert.customer_id}
+          onClick={() => navigateTo(`/customer-profile/${alert.customer_id}?tab=completion`)}
+          role="button"
+          tabIndex={0}
           style={{
             border: `1px solid ${alert.is_overdue ? '#fecaca' : '#e2e8f0'}`,
             borderLeft: `3px solid ${alert.is_overdue ? '#ef4444' : '#3b82f6'}`,
             borderRadius: '10px',
             padding: '10px 12px',
             background: alert.is_overdue ? '#fef2f2' : '#f8fafc',
+            cursor: 'pointer',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
@@ -158,22 +168,26 @@ function KsebRegistrationAlertList({ alerts }) {
   );
 }
 
-function ServiceDueAlertList({ alerts }) {
+function ServiceDueAlertList({ alerts, navigateTo }) {
   if (alerts === null) return null;
   if (!alerts) return <ListLoader />;
   if (alerts.length === 0) return <EmptyState message="No upcoming service due dates right now." />;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+    <div id="service-due-container" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       {alerts.map((alert) => (
         <div
           key={alert.customer_id}
+          onClick={() => navigateTo(`/customer-profile/${alert.customer_id}?tab=service`)}
+          role="button"
+          tabIndex={0}
           style={{
             border: `1px solid ${alert.is_overdue ? '#fecaca' : '#e2e8f0'}`,
             borderLeft: `3px solid ${alert.is_overdue ? '#ef4444' : '#3b82f6'}`,
             borderRadius: '10px',
             padding: '10px 12px',
             background: alert.is_overdue ? '#fef2f2' : '#f8fafc',
+            cursor: 'pointer',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
@@ -331,8 +345,21 @@ function AdminOverviewTab({
   mode, onModeChange,
   selectedYear, onYearChange,
   visibleLines, onToggleLine,
+  navigateTo,
 }) {
   const activeData = mode === 'monthly' ? monthlyTrend : yearlySummary;
+
+  // Once loaded, an empty array means there's genuinely nothing to show —
+  // hide that card entirely rather than showing an "empty" message.
+  // While alerts is still loading (undefined/null), leave it visible so the
+  // list's own loading state (ListLoader) still renders.
+  const ksebAlerts = alerts?.kseb_registration_alerts;
+  const serviceAlerts = alerts?.service_due_alerts;
+  const ksebIsEmpty = Array.isArray(ksebAlerts) && ksebAlerts.length === 0;
+  const serviceIsEmpty = Array.isArray(serviceAlerts) && serviceAlerts.length === 0;
+  const showKsebCard = !ksebIsEmpty;
+  const showServiceCard = !serviceIsEmpty;
+  const showAlertsGrid = showKsebCard || showServiceCard;
 
   return (
     <>
@@ -342,6 +369,7 @@ function AdminOverviewTab({
           accentClass="accent-slate"
           label="Total Customers"
           value={yearlySummary ? yearlySummary.total_customers : '--'}
+          onClick={() => navigateTo('/customers')}
         />
         <MetricCard
           icon={Zap}
@@ -373,26 +401,30 @@ function AdminOverviewTab({
         <GrowthLegendList visibleLines={visibleLines} onToggle={onToggleLine} />
       </ChartCard>
 
-      <div className="chart-card-grid">
-        <ChartCard
-          title="KSEB Registration Due"
-          height={260}
-          cardStyle={{ padding: '14px 16px', marginBottom: 0 }}
-          bodyStyle={{ height: 220, minHeight: 220 }}
-          titleStyle={{ marginBottom: 10 }}
-        >
-          <KsebRegistrationAlertList alerts={alerts?.kseb_registration_alerts} />
-        </ChartCard>
-        <ChartCard
-          title="Service Due Date"
-          height={260}
-          cardStyle={{ padding: '14px 16px', marginBottom: 0 }}
-          bodyStyle={{ height: 220, minHeight: 220 }}
-          titleStyle={{ marginBottom: 10 }}
-        >
-          <ServiceDueAlertList alerts={alerts?.service_due_alerts} />
-        </ChartCard>
-      </div>
+      {showAlertsGrid && (
+        <div className="chart-card-grid">
+          {showKsebCard && (
+            <ChartCard
+              title="KSEB Registration Due"
+              height="auto"
+              cardStyle={{ padding: '14px 16px', marginBottom: 0 }}
+              titleStyle={{ marginBottom: 10 }}
+            >
+              <KsebRegistrationAlertList alerts={ksebAlerts} navigateTo={navigateTo} />
+            </ChartCard>
+          )}
+          {showServiceCard && (
+            <ChartCard
+              title="Service Due Date"
+              height="auto"
+              cardStyle={{ padding: '14px 16px', marginBottom: 0 }}
+              titleStyle={{ marginBottom: 10 }}
+            >
+              <ServiceDueAlertList alerts={serviceAlerts} navigateTo={navigateTo} />
+            </ChartCard>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -557,6 +589,7 @@ function AdminDashboard({ user, role, onLogout, currentPath, navigateTo, childre
               onYearChange={handleYearChange}
               visibleLines={visibleLines}
               onToggleLine={toggleLine}
+              navigateTo={navigateTo}
             />
           ) : (
             <AdminAnalyticsTab status={status} districts={districts} />

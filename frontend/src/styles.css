@@ -6176,6 +6176,13 @@ status-badge-token-mnre {
   color: var(--secondary);
 }
 
+/* --- Admin Dashboard: KSEB Registration Due / Service Due Date containers --- */
+#kseb-registration-container,
+#service-due-container {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* --- Special permission-based alert boxes (KSEB Registration / Service Due) --- */
 .staff-alert-list {
   display: flex;
