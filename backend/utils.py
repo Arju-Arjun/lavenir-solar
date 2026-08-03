@@ -9,7 +9,7 @@ from sqlalchemy import inspect as sa_inspect
 from models import db, User, UserPermission, PermissionRequest, SiteVisit, KSEB
 from flask import jsonify
 
-import google.generativeai as genai
+from google import genai
 
 
 def send_reset_email(to_email, reset_link):
