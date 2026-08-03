@@ -31,6 +31,7 @@ from routes.documents import documents_bp
 from routes.profile import profile_bp
 from routes.workflow import workflow_bp
 from routes.complaints import complaints_bp
+from routes.reports import reports_bp
 from routes.scheduler import start_scheduler
 
 load_dotenv()
@@ -103,6 +104,7 @@ app.register_blueprint(documents_bp, url_prefix='/api/documents')
 app.register_blueprint(profile_bp, url_prefix='/api/profile')
 app.register_blueprint(workflow_bp, url_prefix='/api/workflow')
 app.register_blueprint(complaints_bp, url_prefix='/api/complaints')
+app.register_blueprint(reports_bp, url_prefix='/api/reports')
 
 
 @app.route('/')

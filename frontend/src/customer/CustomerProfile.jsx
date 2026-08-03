@@ -76,7 +76,13 @@ export default function CustomerProfile({ customerId }) {
     parseTabFromUrl();
     window.addEventListener('popstate', parseTabFromUrl);
     return () => window.removeEventListener('popstate', parseTabFromUrl);
-  }, [cleanCustomerId]);
+    // NOTE: depend on the raw `customerId` prop (which still carries the
+    // "?tab=..." query string as passed down from App.jsx), NOT on
+    // cleanCustomerId. cleanCustomerId strips the query string, so it stays
+    // identical ("CUS014") across a tab-only notification navigation and
+    // this effect would never re-run - which was the root cause of clicking
+    // a notification updating the address bar but not the visible tab.
+  }, [customerId]);
 
   const handleTabChange = (tabId) => {
     setActiveTab(tabId);

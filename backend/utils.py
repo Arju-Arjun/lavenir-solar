@@ -3,8 +3,13 @@ import re
 import os
 import requests
 import cloudinary.uploader
+from datetime import datetime, date
+from decimal import Decimal
+from sqlalchemy import inspect as sa_inspect
 from models import db, User, UserPermission, PermissionRequest, SiteVisit, KSEB
 from flask import jsonify
+
+import google.generativeai as genai
 
 
 def send_reset_email(to_email, reset_link):
@@ -281,3 +286,158 @@ def get_users_with_permission_multi(module_names, permission_type='update'):
             target_ids.append(perm.user_id)
 
     return target_ids
+
+
+# ---------------------------------------------------------------------------
+# GENERIC MODEL SERIALIZER
+# ---------------------------------------------------------------------------
+# Several module models (MaterialDelivery, MaterialInstallation, ...) don't
+# define their own to_dict(). Rather than hand-writing/maintaining a dict for
+# each one, this walks the SQLAlchemy column mapping directly. Models that DO
+# have a to_dict() still use it (it's usually richer - e.g. includes
+# customer_name), this is just the fallback.
+
+def serialize_model(instance):
+    if instance is None:
+        return None
+
+    if hasattr(instance, 'to_dict'):
+        try:
+            return instance.to_dict()
+        except TypeError:
+            pass  # some to_dict()s take optional args; fall through on mismatch
+
+    result = {}
+    mapper = sa_inspect(instance).mapper
+    for column in mapper.columns:
+        value = getattr(instance, column.key)
+        if isinstance(value, datetime) or isinstance(value, date):
+            value = value.isoformat()
+        elif isinstance(value, Decimal):
+            value = float(value)
+        result[column.key] = value
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GEMINI-POWERED REPORT GENERATION
+# ---------------------------------------------------------------------------
+
+_GEMINI_CONFIGURED = False
+
+
+def _ensure_gemini_configured():
+    global _GEMINI_CONFIGURED
+    if not _GEMINI_CONFIGURED:
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set in the environment. Add it to your .env file."
+            )
+        genai.configure(api_key=api_key)
+        _GEMINI_CONFIGURED = True
+
+
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
+
+
+LANGUAGE_INSTRUCTIONS = {
+    'english': "Write the entire report in English.",
+    'malayalam': (
+        "Write the entire report in Malayalam, using Malayalam script "
+        "(e.g. മലയാളം), not transliteration."
+    ),
+    'hindi': (
+        "Write the entire report in Hindi, using Devanagari script "
+        "(e.g. हिन्दी), not transliteration."
+    ),
+    'manglish': (
+        "Write the entire report in Manglish - that is, Malayalam language "
+        "and sentence structure, but written using plain English/Latin "
+        "alphabet letters (no Malayalam script), the casual way Malayalees "
+        "commonly type in chats (e.g. 'customer nte project 60% complete "
+        "aanu'). Do not switch to English sentences or Malayalam script."
+    ),
+}
+
+
+def _resolve_language_instruction(language):
+    key = (language or 'english').strip().lower()
+    return LANGUAGE_INSTRUCTIONS.get(key, LANGUAGE_INSTRUCTIONS['english'])
+
+
+def _build_customer_report_prompt(data, language='english'):
+    return f"""You are writing an internal project-status report for a solar
+installation company, for staff/management use. Using the JSON data below
+(covering all workflow modules for one customer), write a clear, well
+organized report in plain text (no markdown symbols like ** or ##) covering:
+
+1. Customer overview (name, ID, district, place, capacity, overall project status)
+2. Progress across each module: Site Visit, MNRE Profile, Payment Flow,
+   Bank Loan, KSEB Feasibility, Material Delivery, Material Installation,
+   KSEB Registration & Completion, DCR, MNRE Installation, Service & Maintenance
+   - for each, state whether it's Completed or Pending and mention any
+     notable details (amounts, dates, comments) from the data
+3. Any risks, delays, or missing information you notice
+4. A short overall summary / next steps
+
+Only use facts present in the data below - do not invent figures or dates.
+If a module's data is null, say it hasn't been started yet.
+
+LANGUAGE INSTRUCTION: {_resolve_language_instruction(language)}
+(Keep numbers, dates, module names, and proper nouns as-is; apply the
+language instruction to the surrounding sentences/prose.)
+
+DATA:
+{json.dumps(data, indent=2, default=_json_default)}
+"""
+
+
+def _build_staff_report_prompt(data, language='english'):
+    return f"""You are writing an internal staff performance report for a
+solar installation company, for management use. Using the JSON data below
+(covering one staff member's logged activity, site visits, and complaint
+handling over a specific date range), write a clear, well organized report
+in plain text (no markdown symbols like ** or ##) covering:
+
+1. Staff overview (name, role, department, the reporting period covered)
+2. Volume and nature of activity logged during the period (from activity_log)
+3. Site visits handled
+4. Complaints assigned vs resolved during the period, and how promptly
+5. An overall performance summary and any observations worth flagging to management
+
+Only use facts present in the data below - do not invent figures or dates.
+If a section has no data, say no activity was recorded for that period.
+
+LANGUAGE INSTRUCTION: {_resolve_language_instruction(language)}
+(Keep numbers, dates, module names, and proper nouns as-is; apply the
+language instruction to the surrounding sentences/prose.)
+
+DATA:
+{json.dumps(data, indent=2, default=_json_default)}
+"""
+
+
+def generate_gemini_report(data, report_type, language='english', model_name='gemini-3.6-flash'):
+    """
+    report_type: 'customer' or 'staff'.
+    language: 'english' | 'malayalam' | 'hindi' | 'manglish'.
+    Returns the report as plain text.
+    """
+    _ensure_gemini_configured()
+
+    if report_type == 'customer':
+        prompt = _build_customer_report_prompt(data, language=language)
+    elif report_type == 'staff':
+        prompt = _build_staff_report_prompt(data, language=language)
+    else:
+        raise ValueError(f"Unknown report_type: {report_type}")
+
+    model = genai.GenerativeModel(model_name)
+    response = model.generate_content(prompt)
+    return response.text

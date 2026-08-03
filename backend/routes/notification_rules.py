@@ -36,8 +36,8 @@ NOTIF_TYPE_TAB_MAP = {
     "renewal_due": "service",
     "contract_complete": "service",
     "feasibility_delay": "kseb",
-    "registration_delay": "kseb-registration",
-    "fee_pending": "kseb-registration",
+    "registration_delay": "completion",
+    "fee_pending": "completion",
     "dcr_delay": "dcr",
     "material_items_pending": "material-delivery",
     "installation_table_pending": "installation",
@@ -490,14 +490,7 @@ def check_feasibility_delay(customer):
 
 
 def check_registration_delay(customer):
-    """
-    KSEB Feasibility complete ആയിട്ട് REGISTRATION_DELAY_DELAY_SECONDS (12h)
-    കഴിഞ്ഞിട്ടും registration submit ചെയ്തിട്ടില്ലെങ്കിൽ അലർട്ട്, പിന്നെ
-    every REGISTRATION_DELAY_REPEAT_GAP_SECONDS (5h).
-
-    NOTE: Feasibility "completed ആയ സമയം" track ചെയ്യാൻ dedicated column
-    ഇല്ലാത്തതിനാൽ, KSEB.updated_at തന്നെ proxy ആയി ഉപയോഗിക്കുന്നു.
-    """
+    
     latest_kseb = (
         KSEB.query
         .filter_by(customer_project_id=customer.id)
@@ -529,10 +522,7 @@ def check_registration_delay(customer):
 
 
 def check_fee_pending(customer):
-    """
-    Registration submit ചെയ്തു, പക്ഷേ fee അടച്ചിട്ടില്ലെങ്കിൽ
-    FEE_PENDING_DELAY_SECONDS കഴിഞ്ഞ് അലർട്ട്.
-    """
+   
     reg = KsebRegistrationCompletion.query.filter_by(customer_project_id=customer.id).first()
     if not reg or not reg.registration_submitted or reg.payment_done:
         return
@@ -555,10 +545,7 @@ def check_fee_pending(customer):
 
 
 def check_dcr_delay(customer):
-    """
-    Solar panel deliver ചെയ്തിട്ട് DCR_DELAY_DELAY_SECONDS (1 day) കഴിഞ്ഞിട്ടും
-    DCR certificate sold ആയിട്ടില്ലെങ്കിൽ അലർട്ട്, 2x/day.
-    """
+   
     delivery = customer.material_delivery_rel
     # Trigger is specifically "solar panel delivered" (panel_delivered), not
     # delivery.work_done == 'Completed' (which also requires electrical +
@@ -588,11 +575,7 @@ def check_dcr_delay(customer):
 
 
 def check_material_items_pending(customer):
-    """
-    Electrical + Panel + Structure മൂന്നും deliver ചെയ്തിട്ട്
-    MATERIAL_ITEMS_DELAY_SECONDS (5h) കഴിഞ്ഞിട്ടും material items list-ൽ
-    ഒന്നും (quantity>0) add ചെയ്തിട്ടില്ലെങ്കിൽ അലർട്ട്, 2x/day.
-    """
+   
     delivery = customer.material_delivery_rel
     if not delivery or not delivery.electrical_delivered or not delivery.panel_delivered or not delivery.structure_delivered:
         return  # delivery itself not confirmed complete yet (could be a bare auto-created row)

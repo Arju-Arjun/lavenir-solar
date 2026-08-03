@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Login from './components/Login';
+import NotFound from './components/NotFound';
 import ForgotPassword from './components/Forgotpassword';
 import ResetPassword from './components/Resetpassword';   
 import AdminDashboard from './admin/AdminDashboard';
@@ -13,6 +14,8 @@ import ProfileView from './staff/ProfileView';
 import WorkflowView from './customer/WorkflowView';
 import Supplements from './components/Supplements';
 import ComplaintsPage from './components/Complaints';
+import ReportsView from './admin/ReportsView';
+
 
 function ProtectedRoute({ isAllowed, fallback, children }) {
   return isAllowed ? children : fallback;
@@ -53,12 +56,12 @@ function DashboardContent({ currentPath, role }) {
     return role === 'admin' ? <Settings /> : null;
   }
 
-  return (
-    <div className="dashboard-placeholder-view">
-      <h2>Page not found</h2>
-      <p>The page you're looking for doesn't exist.</p>
-    </div>
-  );
+  // Admin-only route
+  if (currentPath === '/reports') {
+    return role === 'admin' ? <ReportsView /> : null;
+  }
+
+  return <NotFound />;
 }
 
 function App() {
@@ -94,6 +97,10 @@ function App() {
     if (currentPath.startsWith('/reset-password/')) {
       const token = currentPath.split('/reset-password/')[1];
       return <ResetPassword token={token} onResetSuccess={() => navigateTo('/')} />;
+    }
+
+    if (currentPath !== '/') {
+      return <NotFound onBackHome={() => navigateTo('/')} />;
     }
 
     return (

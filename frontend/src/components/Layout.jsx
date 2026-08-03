@@ -256,6 +256,7 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
               <button className={`nav-node-item ${currentPath === '/workflow-details' ? 'active' : ''}`} onClick={() => navigateTo('/workflow-details')}>Workflow Details</button>
               <button className={`nav-node-item ${currentPath === '/supplements' ? 'active' : ''}`} onClick={() => navigateTo('/supplements')}>Supplement Documents</button>
               <button className={`nav-node-item ${currentPath === '/complaints' ? 'active' : ''}`} onClick={() => navigateTo('/complaints')}>Complaints</button>
+              <button className={`nav-node-item ${currentPath === '/reports' ? 'active' : ''}`} onClick={() => navigateTo('/reports')}>Reports</button>
               <button className={`nav-node-item ${currentPath === '/settings' ? 'active' : ''}`} onClick={() => navigateTo('/settings')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span>Settings</span>
                 {pendingPermissionCount > 0 && (

@@ -1,6 +1,13 @@
-import { precacheAndRoute } from 'workbox-precaching'
+import { precacheAndRoute, createHandlerBoundToURL } from 'workbox-precaching'
+import { registerRoute, NavigationRoute } from 'workbox-routing'
 
 precacheAndRoute(self.__WB_MANIFEST)
+
+// Offline SPA fallback: any full-page navigation (hard refresh, direct URL,
+// or an unknown route triggering a real request) falls back to the
+// precached index.html instead of failing with no network. Once index.html
+// loads, App.jsx's own routing (and its NotFound component) takes over.
+registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')))
 
 self.addEventListener('push', (event) => {
   let data = {}
