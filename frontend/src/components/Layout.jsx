@@ -3,7 +3,7 @@ import { FaHome } from 'react-icons/fa';
 import { subscribeToPush } from '../utils/push';
 import { timeAgo } from '../utils/timeAgo';
 import { notificationsApi } from '../utils/dashboardApi';
-import NotificationPopup from './NotificationPopup';
+import NotificationPopup from './Notificationpopup';
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`;
 

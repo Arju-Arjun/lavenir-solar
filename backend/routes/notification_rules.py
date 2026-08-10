@@ -93,7 +93,7 @@ RENEWAL_DUE_MONTHS = 6
 DUE_REMINDER_LEAD_DAYS = 15
 DUE_REMINDER_FINAL_DAYS = 2
 DUE_REMINDER_WINDOW_START_HOUR = 0 if TESTING_MODE else 8    # 8 AM IST (bypassed to all-day under TESTING_MODE)
-DUE_REMINDER_WINDOW_END_HOUR = 24 if TESTING_MODE else 12    # 12 PM noon IST (bypassed to all-day under TESTING_MODE)
+DUE_REMINDER_WINDOW_END_HOUR = 24 if TESTING_MODE else 20   # 8 PM IST (bypassed to all-day under TESTING_MODE)
 
 # TESTING_MODE-aware versions of the above: production keeps the real
 # month/day values via relativedelta/timedelta; testing collapses every one
@@ -188,7 +188,7 @@ IMPORTANT_MATERIAL_ITEMS = [
 # ---------------------------------------------------------------------------
 NOTIFICATION_WINDOW_TZ = ZoneInfo("Asia/Kolkata")
 NOTIFICATION_WINDOW_START_HOUR = 0 if TESTING_MODE else 8   # 8:00 AM IST (bypassed to all-day under TESTING_MODE)
-NOTIFICATION_WINDOW_END_HOUR = 24    # 12:00 AM IST / midnight (next day, exclusive)
+NOTIFICATION_WINDOW_END_HOUR = 20    # 8:00 PM IST (bypassed to all-day under TESTING_MODE)
 
 
 # ===========================================================================
