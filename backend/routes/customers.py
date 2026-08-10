@@ -2,8 +2,6 @@ import re
 import json
 import threading
 from datetime import datetime
-import cloudinary
-import cloudinary.uploader
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import func, or_, and_, text
@@ -21,21 +19,9 @@ from models import (db, CustomerProject, CustomerAuditLog, User, UserPermission,
                     MaterialDeliveryItem,
                     MaterialInstallation,
                     SiteVisit)
+from utils import upload_to_r2, delete_r2_file, move_r2_to_trash
 
 customers_bp = Blueprint('customers', __name__)
-
-def delete_cloudinary_image(image_url): 
-    if not image_url or "res.cloudinary.com" not in image_url or "sample.jpg" in image_url:
-        return 
-    try: 
-        pattern = r"/v\d+/(.+)\.[a-zA-Z0-9]+$" 
-        match = re.search(pattern, image_url) 
-        if match: 
-            public_id = match.group(1)
-            cloudinary.uploader.destroy(public_id)
-            print(f"Successfully removed old Cloudinary asset: {public_id}")
-    except Exception as e: 
-        print(f"Cloudinary file removal skipped or failed: {str(e)}")
 
 
 # ==========================================
@@ -44,43 +30,9 @@ def delete_cloudinary_image(image_url):
 # Requirement: when a customer profile is deleted, every document/image
 # belonging to that customer across every module (site visit, payment, KSEB,
 # DCR, material delivery/installation, services, etc.) should NOT be
-# permanently destroyed on Cloudinary. Instead it should be moved into a
-# 'lavenir/trash/...' folder (created automatically by Cloudinary the first
-# time something is renamed into it — no separate setup needed) so it can
-# still be recovered later if needed.
-
-TRASH_FOLDER = "lavenir/trash"
-
-
-def move_cloudinary_to_trash(file_url):
-    """
-    Moves a single Cloudinary asset into TRASH_FOLDER instead of deleting it,
-    preserving its original folder structure underneath, e.g.:
-        lavenir/JohnDoe_1023/sitevisit/adhar_1023.jpg
-        -> lavenir/trash/JohnDoe_1023/sitevisit/adhar_1023.jpg
-    Returns the new secure_url on success, or None if nothing was moved.
-    """
-    if not file_url or "res.cloudinary.com" not in file_url or "sample.jpg" in file_url:
-        return None
-    try:
-        pattern = r"/upload/(?:v\d+/)?(.+)\.[a-zA-Z0-9]+$"
-        match = re.search(pattern, file_url)
-        if not match:
-            return None
-        public_id = match.group(1)
-
-        # Already sitting in trash (e.g. re-triggered delete) — leave it alone.
-        if public_id.startswith(TRASH_FOLDER + "/"):
-            return None
-
-        new_public_id = f"{TRASH_FOLDER}/{public_id}"
-        result = cloudinary.uploader.rename(public_id, new_public_id, overwrite=True)
-        print(f"Moved Cloudinary asset to trash: {public_id} -> {new_public_id}")
-        return result.get("secure_url")
-    except Exception as e:
-        print(f"Cloudinary trash-move skipped or failed for {file_url}: {str(e)}")
-        return None
-
+# permanently destroyed on R2. Instead it should be moved into a
+# 'lavenir/trash/...' key prefix (see move_r2_to_trash() in utils.py) so it
+# can still be recovered later if needed.
 
 def _collect_json_list_urls(json_text, into):
     if not json_text:
@@ -93,12 +45,12 @@ def _collect_json_list_urls(json_text, into):
         pass
 
 
-def collect_customer_cloudinary_urls(customer):
+def collect_customer_r2_urls(customer):
     """
     Walks every module attached to a CustomerProject and pulls out every
-    Cloudinary file/image URL stored on it. Must be called BEFORE the
-    customer row is deleted — once db.session.delete(customer) cascades,
-    these rows (and their URLs) are gone from the DB.
+    R2 file/image URL stored on it. Must be called BEFORE the customer row
+    is deleted — once db.session.delete(customer) cascades, these rows
+    (and their URLs) are gone from the DB.
     """
     urls = []
     if customer.profile_photo:
@@ -280,13 +232,14 @@ def create_customer():
             file_to_upload = request.files['profile_photo']
             if file_to_upload.filename != '':
                 try:
-                    upload_result = cloudinary.uploader.upload(file_to_upload, folder="solar_profiles")
+                    ext = file_to_upload.filename.rsplit('.', 1)[-1] if '.' in file_to_upload.filename else 'jpg'
+                    object_key = f"solar_profiles/{re.sub(r'[^a-zA-Z0-9_-]', '', file_to_upload.filename.rsplit('.', 1)[0])}_{int(datetime.utcnow().timestamp())}.{ext}"
+                    profile_photo_url = upload_to_r2(file_to_upload, object_key, content_type=file_to_upload.mimetype)
                 except Exception as upload_err:
                     return jsonify({
                         "success": False,
                         "message": f"Profile photo upload failed: {str(upload_err)}"
                     }), 502
-                profile_photo_url = upload_result.get('secure_url')
 
         # today = datetime.utcnow()
 
@@ -361,15 +314,14 @@ def create_customer():
         db.session.add(MaterialDelivery(
             customer_project_id=new_customer.id,
             created_by=current_user_id,
-            # delivery_date is NOT NULL with no column default, so a
-            # placeholder is unavoidable here. This does NOT mean delivery
-            # has happened - electrical_delivered / panel_delivered /
+            # delivery_date is left unset (nullable=True on the model - see
+            # models.py) so this stub row doesn't show a date the user never
+            # entered. electrical_delivered / panel_delivered /
             # structure_delivered / work_done all stay at their own
             # defaults (False / "Pending"), which is what every
             # delivery-related check in notification_rules.py actually
             # reads (e.g. check_dcr_delay checks delivery.panel_delivered,
             # not delivery_date).
-            delivery_date=datetime.utcnow().date(),
         ))
         db.session.add(MaterialInstallation(customer_project_id=new_customer.id, created_by=current_user_id))
 
@@ -835,6 +787,18 @@ def get_customers():
 @jwt_required()
 def get_customer_profile(customer_id):
     try:
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+        if not user:
+            return jsonify({"success": False, "message": "Operator profile missing"}), 404
+
+        # CHANGED: this route had no permission check at all - any logged-in
+        # staff account could fetch any customer's full profile via a direct
+        # API call, regardless of their 'Customer Profile' view permission.
+        # Same check_staff_action_permission() used by update/delete below.
+        if not check_staff_action_permission(user.id, user.role, 'view'):
+            return jsonify({"success": False, "message": "Security Error: View privileges absent."}), 403
+
         customer = CustomerProject.query.filter_by(customer_id=customer_id).first()
         if not customer:
             return jsonify({
@@ -878,16 +842,18 @@ def update_customer_profile(customer_id):
             data = request.form
             if 'profile_photo' in request.files:
                 file = request.files['profile_photo']
-                upload_result = cloudinary.uploader.upload(file, folder="solar_profiles")
+                ext = file.filename.rsplit('.', 1)[-1] if '.' in file.filename else 'jpg'
+                object_key = f"solar_profiles/{re.sub(r'[^a-zA-Z0-9_-]', '', file.filename.rsplit('.', 1)[0])}_{int(datetime.utcnow().timestamp())}.{ext}"
+                new_url = upload_to_r2(file, object_key, content_type=file.mimetype)
                 if customer.profile_photo:
-                    delete_cloudinary_image(customer.profile_photo)
-                changes["profile_photo"] = {"old": customer.profile_photo, "new": upload_result.get("secure_url")}
-                customer.profile_photo = upload_result.get("secure_url")
+                    delete_r2_file(customer.profile_photo)
+                changes["profile_photo"] = {"old": customer.profile_photo, "new": new_url}
+                customer.profile_photo = new_url
         else:
             data = request.get_json() or {}
             if 'profile_photo' in data and data['profile_photo'] != customer.profile_photo:
                 if customer.profile_photo:
-                    delete_cloudinary_image(customer.profile_photo)
+                    delete_r2_file(customer.profile_photo)
                 changes["profile_photo"] = {"old": customer.profile_photo, "new": data['profile_photo']}
                 customer.profile_photo = data['profile_photo']
 
@@ -903,19 +869,22 @@ def update_customer_profile(customer_id):
                 setattr(customer, field, data[field])
 
         if 'capacity_kw' in data and data['capacity_kw'] != '':
+            visit = SiteVisit.query.filter_by(customer_project_id=customer.id).order_by(SiteVisit.id.desc()).first()
+            provided_val = data['capacity_kw']
             try:
-                new_capacity = float(data['capacity_kw'])
+                new_capacity = float(provided_val)
             except (ValueError, TypeError):
                 return jsonify({"success": False, "message": "Invalid capacity_kw value; must be numeric."}), 400
+
             if float(customer.capacity_kw) != new_capacity:
                 changes['capacity_kw'] = {"old": float(customer.capacity_kw), "new": new_capacity}
                 customer.capacity_kw = new_capacity
-                visit = SiteVisit.query.filter_by(customer_project_id=customer.id).first()
                 if visit:
                     visit.system_capacity = new_capacity
-                    cp=SiteVisit(customer_project_id=customer.id,
-                                 system_capacity=new_capacity)
+                else:
+                    cp = SiteVisit(customer_project_id=customer.id, system_capacity=new_capacity)
                     db.session.add(cp)
+                    
 
         if changes:
             audit_log = CustomerAuditLog(
@@ -957,31 +926,13 @@ def delete_customer_profile(customer_id):
         if not check_staff_action_permission(user.id, user.role, 'delete'):
             return jsonify({"success": False, "message": "Security Error: Destructive access denied."}), 403
 
-        # Gather every document/image URL across ALL modules (site visit,
-        # payment, bank loan, MNRE, KSEB registration, DCR, material
-        # delivery/installation, services...) BEFORE deleting the customer —
-        # once db.session.delete(customer) cascades, those rows are gone.
-        file_urls = collect_customer_cloudinary_urls(customer)
-
-        # db.session.delete(customer) cascades to every related module row
-        # (site_visits, payment_rel, bank_loan_rel, kseb_records,
-        # kseb_registration_rel, dcr_certificate_rel, mnre_profile_rel,
-        # mnre_installation_rel, material_delivery_rel,
-        # material_installation_rel, services, audit_logs) because each of
-        # those relationships is declared with cascade="all, delete-orphan"
-        # in models.py.
+        file_urls = collect_customer_r2_urls(customer)
         db.session.delete(customer)
         db.session.commit()
 
-        # Move the files to Cloudinary trash AFTER the DB commit succeeds,
-        # so a Cloudinary hiccup never blocks the actual customer deletion.
-        # Run it in a background thread so the HTTP response (and the
-        # frontend's "Processing..." spinner) doesn't wait on N network
-        # calls to Cloudinary — the DB delete is already committed at this
-        # point, so there's nothing left for the request to wait on.
         if file_urls:
             threading.Thread(
-                target=lambda urls=file_urls: [move_cloudinary_to_trash(u) for u in urls],
+                target=lambda urls=file_urls: [move_r2_to_trash(u) for u in urls],
                 daemon=True
             ).start()
 

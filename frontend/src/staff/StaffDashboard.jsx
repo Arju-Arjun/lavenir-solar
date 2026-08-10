@@ -393,10 +393,10 @@ function StaffDashboard({ user, role, onLogout, currentPath, navigateTo, childre
     >
       {currentPath === '/' ? (
         <div className="dashboard-workspace-wrapper">
-          <header className="dashboard-view-header">
-            <h2>Staff Dashboard</h2>
+          {/* <header className="dashboard-view-header"> */}
+            <div className="profile-header-summary-card"><h2> Staff Dashboard</h2></div>
             <p className="welcome-back-text">Welcome back, {user?.full_name || 'Staff'}</p>
-          </header>
+          {/* </header> */}
           {error && <div className="table-error-fallback">Failed to load dashboard data: {error}</div>}
 
           <SummaryCards summary={summary} />

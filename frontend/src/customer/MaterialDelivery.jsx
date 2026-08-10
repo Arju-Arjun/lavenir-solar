@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { FaLock, FaEdit, FaBoxOpen, FaTruck, FaPaperPlane } from "react-icons/fa";
+import { FaLock, FaEdit, FaBoxOpen, FaTruck, FaPaperPlane, FaFileAlt, FaTimes } from "react-icons/fa";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useAuth } from "../context/AuthContext";
 
@@ -18,7 +18,32 @@ const emptyGeneralForm = () => ({
   comments: ""
 });
 
-const MaterialDelivery = ({ customerId }) => {
+// Same detection PaymentFlow uses for its receipts: a plain substring check
+// on the URL (works reliably against Cloudinary's raw/upload URLs), or the
+// File's name/mimetype for a not-yet-uploaded local file.
+const isPdfSource = (source) => {
+  if (typeof source === "string") {
+    return source.toLowerCase().includes(".pdf");
+  }
+  if (source && source.name) {
+    return source.name.toLowerCase().endsWith(".pdf") || (source.type && source.type === "application/pdf");
+  }
+  return false;
+};
+
+const getDocumentKind = (source) => (isPdfSource(source) ? "pdf" : "image");
+
+// Delivery date is stored/sent as yyyy-mm-dd (native <input type="date">
+// value, and what the backend expects/returns), but shown as dd-mm-yyyy in
+// the view mode display.
+const formatISOToDMY = (isoStr) => {
+  if (!isoStr) return "";
+  const [yyyy, mm, dd] = isoStr.split("-");
+  if (!yyyy || !mm || !dd) return isoStr;
+  return `${dd}-${mm}-${yyyy}`;
+};
+
+const MaterialDelivery = ({ customerId, customerName }) => {
   const { permissions, refetchPermissions, isAdmin } = useAuth();
   
   const modulePermissions = useMemo(
@@ -43,6 +68,13 @@ const MaterialDelivery = ({ customerId }) => {
   const [deliveryData, setDeliveryData] = useState(null);
   const [formData, setFormData] = useState(emptyGeneralForm());
 
+  // Delivery date is picked via a date input, kept separate from
+  // formData.delivery_date (which stores the saved yyyy-mm-dd value used for
+  // the view-mode display). This field always starts blank when Edit is
+  // opened instead of being pre-filled with the previously saved date - it's
+  // only sent to the backend if the user actually picks a new value.
+  const [deliveryDateInput, setDeliveryDateInput] = useState("");
+
   // Read-only, comes from SiteVisit on the backend (a sibling of `delivery`
   // in the API response, present even when there's no delivery record yet).
   // Kept independent of formData/deliveryData so it's never wiped out.
@@ -52,6 +84,11 @@ const MaterialDelivery = ({ customerId }) => {
   const [newImageFiles, setNewImageFiles] = useState([]);
   const [imagePreviews, setImagePreviews] = useState([]);
   const [removedImages, setRemovedImages] = useState([]);
+
+  const [existingDocuments, setExistingDocuments] = useState([]);
+  const [newDocumentFiles, setNewDocumentFiles] = useState([]);
+  const [newDocumentPreviews, setNewDocumentPreviews] = useState([]);
+  const [removedDocuments, setRemovedDocuments] = useState([]);
 
   const [modalConfig, setModalConfig] = useState({
     isOpen: false,
@@ -63,9 +100,13 @@ const MaterialDelivery = ({ customerId }) => {
   const imagePreviewsRef = useRef(imagePreviews);
   imagePreviewsRef.current = imagePreviews;
 
+  const newDocumentPreviewsRef = useRef(newDocumentPreviews);
+  newDocumentPreviewsRef.current = newDocumentPreviews;
+
   useEffect(() => {
     return () => {
       imagePreviewsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      newDocumentPreviewsRef.current.forEach((url) => { if (url) URL.revokeObjectURL(url); });
     };
   }, []);
 
@@ -107,10 +148,12 @@ const MaterialDelivery = ({ customerId }) => {
             comments: data.delivery.comments || ""
           });
           setExistingImages(data.delivery.delivery_images || []);
+          setExistingDocuments(data.delivery.delivery_document || []);
         } else {
           setDeliveryData(null);
           setFormData(emptyGeneralForm());
           setExistingImages([]);
+          setExistingDocuments([]);
         }
       }
     } catch (err) {
@@ -217,6 +260,51 @@ const MaterialDelivery = ({ customerId }) => {
     setNewImageFiles((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  const handleDocumentSelect = (e) => {
+    if (!canUpdate) return;
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+      setNewDocumentFiles((prev) => [...prev, ...files]);
+      const newPreviews = files.map((file) => (getDocumentKind(file) === "image" ? URL.createObjectURL(file) : null));
+      setNewDocumentPreviews((prev) => [...prev, ...newPreviews]);
+    }
+  };
+
+  const handleRemoveExistingDocument = (url) => {
+    if (!canUpdate) return;
+    setExistingDocuments((prev) => prev.filter((doc) => doc !== url));
+    setRemovedDocuments((prev) => [...prev, url]);
+  };
+
+  const handleRemoveNewDocument = (idx) => {
+    if (!canUpdate) return;
+    setNewDocumentPreviews((prev) => {
+      const removedUrl = prev[idx];
+      if (removedUrl) URL.revokeObjectURL(removedUrl);
+      return prev.filter((_, i) => i !== idx);
+    });
+    setNewDocumentFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // Renders a document tile using the same visual model as PaymentFlow's
+  // "Upload Payment Receipts": an image thumbnail for image files, or a
+  // fallback card with a file icon + type tag for PDFs.
+  // `source` is either a stored URL (string) or a locally-picked File;
+  // `previewUrl` is only used for not-yet-uploaded image files.
+  const renderDocumentPreview = (source, previewUrl, label = "PDF") => {
+    const kind = getDocumentKind(source);
+    if (kind === "image") {
+      const imgSrc = previewUrl || source;
+      return <img src={imgSrc} alt="Delivery document" className="receipt-gallery-medium-image" />;
+    }
+    return (
+      <div className="receipt-pdf-fallback-frame">
+        <FaFileAlt className="receipt-pdf-gallery-icon" />
+        <span className="receipt-pdf-text-tag">{label}</span>
+      </div>
+    );
+  };
+
   const handleSaveClick = (e) => {
     if (e) e.preventDefault();
     if (!canUpdate) return;
@@ -233,8 +321,13 @@ const MaterialDelivery = ({ customerId }) => {
     setSaving(true);
     setModalConfig((prev) => ({ ...prev, isOpen: false }));
 
+    // delivery_date is only overwritten if the user actually picked a new
+    // value into the date field this session; otherwise the previously
+    // saved date is resubmitted untouched.
+    const submittedFormData = deliveryDateInput ? { ...formData, delivery_date: deliveryDateInput } : formData;
+
     const payload = new FormData();
-    Object.entries(formData).forEach(([key, value]) => {
+    Object.entries(submittedFormData).forEach(([key, value]) => {
       payload.append(key, value);
     });
 
@@ -243,6 +336,12 @@ const MaterialDelivery = ({ customerId }) => {
     });
 
     payload.append("removed_images", JSON.stringify(removedImages));
+
+    newDocumentFiles.forEach((file) => {
+      payload.append("delivery_document", file);
+    });
+
+    payload.append("removed_documents", JSON.stringify(removedDocuments));
 
     const endpoint = `${import.meta.env.VITE_API_BASE_URL}/api/material/${customerId}/`;
     const method = deliveryData ? "PUT" : "POST";
@@ -258,6 +357,11 @@ const MaterialDelivery = ({ customerId }) => {
         imagePreviews.forEach((url) => URL.revokeObjectURL(url));
         setImagePreviews([]);
         setRemovedImages([]);
+        setNewDocumentFiles([]);
+        newDocumentPreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); });
+        setNewDocumentPreviews([]);
+        setRemovedDocuments([]);
+        setDeliveryDateInput("");
         await fetchDeliveryDataset();
       } else {
         const errData = await res.json();
@@ -273,10 +377,15 @@ const MaterialDelivery = ({ customerId }) => {
 
   const handleCancelEditClick = () => {
     setIsEditing(false);
+    setDeliveryDateInput("");
     setNewImageFiles([]);
     imagePreviews.forEach((url) => URL.revokeObjectURL(url));
     setImagePreviews([]);
     setRemovedImages([]);
+    setNewDocumentFiles([]);
+    newDocumentPreviews.forEach((url) => { if (url) URL.revokeObjectURL(url); });
+    setNewDocumentPreviews([]);
+    setRemovedDocuments([]);
     
     if (deliveryData) {
       setFormData({
@@ -292,9 +401,11 @@ const MaterialDelivery = ({ customerId }) => {
         comments: deliveryData.comments || ""
       });
       setExistingImages(deliveryData.delivery_images || []);
+      setExistingDocuments(deliveryData.delivery_document || []);
     } else {
       setFormData(emptyGeneralForm());
       setExistingImages([]);
+      setExistingDocuments([]);
     }
     // siteVisitChanges is deliberately left untouched here — it's read-only
     // and sourced from SiteVisit, so cancelling the delivery edit has no
@@ -370,6 +481,7 @@ const MaterialDelivery = ({ customerId }) => {
         {activeTab === "items" && (
             <MaterialItem 
               customerId={customerId} 
+              customerName={customerName}
               canUpdate={canUpdate} 
               mode="delivery" 
             />
@@ -381,33 +493,45 @@ const MaterialDelivery = ({ customerId }) => {
           <div className="detail-data-grid">
             <div className="detail-item-node">
               <span className="node-label">Delivery Date:</span>
-              <span className="node-value">{formData.delivery_date || "Not Scheduled"}</span>
+              {formData.delivery_date ? (
+                <span className="node-value">{formatISOToDMY(formData.delivery_date)}</span>
+              ) : (
+                <span style={{ fontSize: "0.65rem", color: "#64748b" }}>dd-mm-yyyy</span>
+              )}
             </div>
             <div className="detail-item-node">
               <span className="node-label">Electrical Items:</span>
-              <span className={`node-value ${formData.electrical_delivered ? "status-success" : "status-danger"}`}>
+              <span className={`status-badge-token-mnre ${formData.electrical_delivered ? 'mnre-status-badge-completed' : 'mnre-status-badge-pending'}`}>
                 {formData.electrical_delivered ? "Delivered" : "Pending"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Structure Items:</span>
-              <span className={`node-value ${formData.structure_delivered ? "status-success" : "status-danger"}`}>
+             <span className={`status-badge-token-mnre ${formData.structure_delivered ? 'mnre-status-badge-completed' : 'mnre-status-badge-pending'}`}>
                 {formData.structure_delivered ? "Delivered" : "Pending"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Solar Panels:</span>
-              <span className={`node-value ${formData.panel_delivered ? "status-success" : "status-danger"}`}>
+              <span className={`status-badge-token-mnre ${formData.panel_delivered ? 'mnre-status-badge-completed' : 'mnre-status-badge-pending'}`}>
                 {formData.panel_delivered ? "Delivered" : "Pending"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Delivered By:</span>
-              <span className="node-value">{formData.delivered_by || "N/A"}</span>
+              {formData.delivered_by ? (
+                <span className="node-value">{formData.delivered_by}</span>
+              ) : (
+                <span  style={{ fontSize: "0.65rem", color: "#9ca3af" }}>N/A</span>
+              )}
             </div>
             <div className="detail-item-node">
               <span className="node-label">Received By:</span>
-              <span className="node-value">{formData.received_by || "N/A"}</span>
+              {formData.received_by ? (
+                <span className="node-value">{formData.received_by}</span>
+              ) : (
+                <span  style={{ fontSize: "0.65rem", color: "#9ca3af" }}>N/A</span>
+              )}
             </div>
           </div>
 
@@ -422,6 +546,20 @@ const MaterialDelivery = ({ customerId }) => {
             <div className="text-narrative-block mt-12">
               <label className="narrative-label">Comments</label>
               <p className="comments-text-display">{formData.comments}</p>
+            </div>
+          )}
+
+          {/* Delivery Document multiple files */}
+          {existingDocuments.length > 0 && (
+            <div className="document-vault-section mt-15">
+              <h4 className="vault-group-title">Delivery Documents</h4>
+              <div className="payment-receipts-gallery-grid">
+                {existingDocuments.map((docUrl, i) => (
+                  <a key={i} href={docUrl} target="_blank" rel="noopener noreferrer" className="receipt-gallery-item-card">
+                    {renderDocumentPreview(docUrl, null, "PDF Receipt")}
+                  </a>
+                ))}
+              </div>
             </div>
           )}
 
@@ -440,7 +578,7 @@ const MaterialDelivery = ({ customerId }) => {
           
           <div className="workspace-action-trigger-row center-aligned-row mt-25">
             {canUpdate && (
-              <button type="button" className="btn-action-edit" onClick={() => setIsEditing(true)}>
+              <button type="button" className="btn-action-edit" onClick={() => { setDeliveryDateInput(""); setIsEditing(true); }}>
                 <FaEdit /> Edit Details
               </button>
             )}
@@ -457,7 +595,18 @@ const MaterialDelivery = ({ customerId }) => {
           <div className="form-grid-layout">
             <div className="form-group-element">
               <label>Delivery Date</label>
-              <input type="date" name="delivery_date" value={formData.delivery_date} onChange={handleInputChange} disabled={!canUpdate} />
+              <input
+                type="date"
+                name="delivery_date_input"
+                value={deliveryDateInput}
+                onChange={(e) => canUpdate && setDeliveryDateInput(e.target.value)}
+                disabled={!canUpdate}
+              />
+              {formData.delivery_date && (
+                <p className="field-note" style={{ fontSize: "9px" }}>
+                  Currently saved: {formatISOToDMY(formData.delivery_date)}. Leave blank to keep it.
+                </p>
+              )}
             </div>
             <div className="form-group-element">
               <label>Delivered By</label>
@@ -496,6 +645,43 @@ const MaterialDelivery = ({ customerId }) => {
             <div className="form-group-element textarea-full-span">
               <label>Comments </label>
               <textarea name="comments" value={formData.comments} onChange={handleInputChange} rows="2" disabled={!canUpdate} />
+            </div>
+          </div>
+
+          <div className="vault-uploader-block mt-16 vault-uploader-block--white">
+            <label>Upload Delivery Documents</label>
+            <div className="payment-uploader-flex-row vertical-stack-previews">
+
+              <input type="file" accept="image/*,.pdf" multiple onChange={handleDocumentSelect} disabled={!canUpdate} />
+
+              {(existingDocuments.length > 0 || newDocumentFiles.length > 0) && (
+                <div style={{ width: "100%", marginTop: "12px" }}>
+                  <span style={{ fontSize: "12px", color: "#64748b", fontWeight: "500", display: "block", marginBottom: "6px" }}>
+                    Uploaded Documents & Previews:
+                  </span>
+
+                  <div className="payment-receipts-gallery-grid">
+                    {existingDocuments.map((url, i) => (
+                      <div key={`exdoc-${i}`} className="receipt-tile-container">
+                        {renderDocumentPreview(url, null)}
+                        <button type="button" onClick={() => handleRemoveExistingDocument(url)} disabled={!canUpdate} className="tile-floating-remove-btn">
+                          <FaTimes />
+                        </button>
+                      </div>
+                    ))}
+
+                    {newDocumentFiles.map((file, i) => (
+                      <div key={`lodoc-${i}`} className="receipt-tile-container">
+                        {renderDocumentPreview(file, newDocumentPreviews[i])}
+                        <button type="button" onClick={() => handleRemoveNewDocument(i)} disabled={!canUpdate} className="tile-floating-remove-btn">
+                          <FaTimes />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
 

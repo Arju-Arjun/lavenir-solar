@@ -2,7 +2,7 @@
    1. VARIABLES & SYSTEM CORE
    ========================================================================== */
 :root {
-  --primary: #f59e0b;         /* Solar Gold */
+  --primary: #f59e0b;     /* Solar Gold */
   --primary-hover: #d97706;   /* Darker Solar Gold */
   --secondary: #0f172a;       /* Deep Slate / Charcoal Blue */
   --accent: #14b8a6;          /* Clean Energy Teal */
@@ -212,7 +212,7 @@ body {
 .top-bar-left, .top-bar-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
 }
 
 .hamburger-icon-btn {
@@ -233,34 +233,9 @@ body {
   background-color: #f1f5f9;
 }
 
-/* .company-branding-title {
-  color: #0066ff;
-  font-style: italic;
-  font-size: 1.4rem;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: baseline;   
-  cursor: pointer;
-  line-height: 1;
-}
-
-.company-branding-title .highlight-l {
-  color: #0066ff;
-  font-style: italic;
-  font-weight: 700;
-  font-size: 2.2rem;        
-  margin-right: 0;          
-  line-height: 1;
-  display: inline-block;
-  transform: skewX(-6deg) translateY(2px); 
-} */
-
-
-
 .company-branding-title {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
   cursor: pointer;
   line-height: 1;
 }
@@ -320,6 +295,20 @@ body {
 .top-bar-home-link:hover {
   color: var(--secondary);
   background-color: #f1f5f9;
+}
+
+
+.company-branding-title .brand-logo-img {
+  margin: 0 0 5px 0;
+  width: 50px;
+  height: 50px;
+  object-fit: contain;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.company-branding-title:hover .brand-logo-img {
+  transform: scale(1.05);
 }
 
 /* ==========================================================================
@@ -2680,6 +2669,14 @@ status-badge-token-mnre {
   /* text-align: center; */
 }
 
+.mnre-status-badge-no {
+  /* background-color: #fef3c7;  */
+  color: #d90606;
+  margin-top: 4px;
+  /* text-align: center; */
+}
+
+
 .mnre-locked-card-override {
   border-color: #f59e0b; 
   background-color: #fffbeb;
@@ -2805,10 +2802,14 @@ status-badge-token-mnre {
 
 /* Form block sub layout adjustments */
 .payment-full-width-field {
-  width: 100%;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .payment-form-row-divider {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
   border-bottom: 1px solid #f1f5f9;
   padding-bottom: 15px;
 }
@@ -2859,6 +2860,17 @@ status-badge-token-mnre {
 .payment-box-input {
   padding: 8px;
   width: 100%;
+}
+
+.payment-additional-inputs-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.payment-additional-inputs-row .payment-box-input {
+  flex: 1 1 140px;
+  width: auto;
 }
 
 /* Ledger Totals Banners styling */
@@ -5710,231 +5722,371 @@ status-badge-token-mnre {
 }
 
 
-/* ==========================================
-   Main Container & Layout
-   ================================---------- */
-.supplement-main-container {
+/* ==========================================================================
+   SUPPLEMENT DOCUMENTS — "Document Cover" Redesign
+   ========================================================================== */
+
+/* ---------- Page shell ---------- */
+.dc-page {
   max-width: 1200px;
   margin: 0 auto;
   padding: 24px 16px;
   font-family: inherit;
-  color: #334155;
+  color: var(--text-main);
   box-sizing: border-box;
 }
 
-.supplement-main-container * {
+.dc-page * {
   box-sizing: border-box;
 }
 
-/* ==========================================
-   Header Block
-   ================================---------- */
-.supplement-header-block {
+/* ---------- Header row ---------- */
+.dc-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
   margin-bottom: 24px;
-  text-align: left;
 }
 
-.supplement-header-block h2 {
+.dc-header-row h2 {
   font-size: 1.75rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--secondary);
   margin: 0 0 6px 0;
 }
 
-.supplement-subtitle-text {
+.dc-header-subtitle {
   font-size: 0.95rem;
-  color: #64748b;
+  color: var(--text-muted);
   margin: 0;
 }
 
-/* ==========================================
-   Content Card / Wrapper
-   ================================---------- */
-.supplement-content-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+.dc-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-/* ==========================================
-   Loading & Error & Empty States
-   ================================---------- */
-.supplement-loader-wrap {
+/* ---------- Panel wrapper ---------- */
+.dc-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+
+/* ---------- Loading / error / empty states ---------- */
+.dc-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 0;
-  color: #64748b;
+  padding: 56px 0;
+  color: var(--text-muted);
   gap: 12px;
 }
 
-.supplement-spinner-circle {
+.dc-spinner {
   width: 36px;
   height: 36px;
-  border: 3px solid #e2e8f0;
-  border-top-color: #2563eb;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--primary);
   border-radius: 50%;
-  animation: supplement-spin 0.8s linear infinite;
+  animation: dc-spin 0.8s linear infinite;
 }
 
-@keyframes supplement-spin {
-  to {
-    transform: rotate(360deg);
-  }
+@keyframes dc-spin {
+  to { transform: rotate(360deg); }
 }
 
-.supplement-error-notice {
+.dc-error {
   background: #fef2f2;
-  color: #991b1b;
+  color: var(--error);
   padding: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   text-align: center;
   font-size: 0.95rem;
   border: 1px solid #fecaca;
 }
 
-.supplement-empty-box {
+.dc-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 16px;
+  padding: 56px 16px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--text-muted);
+  gap: 8px;
 }
 
-.supplement-empty-icon {
-  margin-bottom: 12px;
-  color: #cbd5e1;
-}
-
-.supplement-empty-msg {
-  font-size: 0.95rem;
-  color: #64748b;
-}
-
-/* ==========================================
-   Grid Deck & Card Tiles (Responsive Grid)
-   ================================---------- */
-.supplement-grid-deck {
+/* ---------- Grid ---------- */
+.dc-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 20px;
 }
 
-.supplement-card-tile {
+/* ---------- Card ---------- */
+.dc-card {
   position: relative;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  overflow: hidden;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
   display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
-.supplement-card-tile:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-  border-color: #cbd5e1;
+/* ---------- The "book cover" thumbnail ---------- */
+.dc-cover-wrap {
+  position: relative;
 }
 
-/* ==========================================
-   Tile Links & Previews
-   ================================---------- */
-.supplement-tile-link {
+.dc-cover-link {
+  display: block;
   text-decoration: none;
   color: inherit;
-  display: block;
-  flex: 1;
 }
 
-.supplement-pdf-preview {
+.dc-cover {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-md);
+  background: linear-gradient(150deg, var(--secondary) 0%, #1e3a5f 65%, var(--secondary) 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 32px 16px;
-  background: #ffffff;
+  gap: 10px;
+  overflow: hidden;
+  box-shadow: 0 6px 16px -6px rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  transition: var(--transition);
+}
+
+.dc-card:hover .dc-cover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -8px rgba(15, 23, 42, 0.4);
+}
+
+/* folded top-right corner, like a real document/page */
+.dc-cover-fold {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 26px;
+  height: 26px;
+  background: rgba(255, 255, 255, 0.18);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+/* spine accent stripe down the left edge */
+.dc-cover::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--primary);
+}
+
+.dc-cover-icon {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.dc-cover-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--secondary);
+  background: var(--primary);
+  padding: 3px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.dc-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---------- Download FAB on the cover ---------- */
+.dc-download-fab {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: var(--bg-card);
+  color: var(--secondary);
+  border: none;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--transition);
+  text-decoration: none;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+}
+
+.dc-download-fab:hover {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+/* ---------- View-mode info (left aligned, not centered) ---------- */
+.dc-info {
+  padding: 0 2px;
   text-align: center;
-  height: 140px;
 }
 
-.supplement-pdf-icon {
-  color: #ef4444;
-  margin-bottom: 8px;
+.dc-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0 0 4px 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.supplement-pdf-name {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #1e293b;
+.dc-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  word-break: break-word;
 }
 
-.supplement-img-preview {
-  width: 100%;
-  height: 140px;
-  object-fit: cover;
-  display: block;
+/* ---------- Edit-mode fields ---------- */
+.dc-edit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-/* ==========================================
-   Download Action Button
-   ================================---------- */
-.supplement-download-action-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: rgba(15, 23, 42, 0.6);
-  color: #ffffff;
-  border: none;
+.dc-edit-fields .form-input {
+  font-size: 0.85rem;
+  padding: 8px 10px;
+}
+
+.dc-edit-fields textarea.form-input {
+  min-height: 56px;
+  resize: vertical;
+}
+
+.dc-delete-btn {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+}
+
+/* ---------- Upload-new tile ---------- */
+.dc-upload-tile {
+  aspect-ratio: 3 / 4;
+  border: 2px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 16px;
+  background: var(--bg-app);
+  transition: var(--transition);
+}
+
+.dc-upload-tile:hover {
+  border-color: var(--primary);
+  background: #fffbeb;
+}
+
+.dc-upload-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.dc-upload-circle {
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  width: 28px;
-  height: 28px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  transition: background 0.2s ease;
-  text-decoration: none;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  color: var(--primary);
+  transition: var(--transition);
 }
 
-.supplement-download-action-btn:hover {
-  background: rgba(15, 23, 42, 0.85);
+.dc-upload-tile:hover .dc-upload-circle {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
 }
 
-/* ==========================================
-   Mobile Optimization
-   ================================---------- */
+.dc-upload-text {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.dc-upload-input {
+  display: none;
+}
+
+.dc-upload-preview {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.dc-upload-filename {
+  font-size: 0.78rem;
+  color: var(--text-main);
+  font-weight: 500;
+  word-break: break-word;
+  text-align: left;
+}
+
+/* ---------- Mobile ---------- */
 @media (max-width: 640px) {
-  .supplement-main-container {
+  .dc-page {
     padding: 12px 8px;
   }
 
-  .supplement-header-block h2 {
+  .dc-header-row h2 {
     font-size: 1.35rem;
   }
 
-  .supplement-subtitle-text {
+  .dc-header-subtitle {
     font-size: 0.85rem;
   }
 
-  .supplement-content-card {
+  .dc-panel {
     padding: 12px;
   }
 
-  .supplement-grid-deck {
-    grid-template-columns: 1fr; /* Full width stacks cards cleanly on small screens */
+  .dc-grid {
+    grid-template-columns: repeat(2, 1fr);
     gap: 12px;
   }
 }
@@ -6938,4 +7090,151 @@ status-badge-token-mnre {
   .notfound-actions {
     justify-content: center;
   }
+}
+/* ============================================================
+   CENTER-SCREEN POPUP NOTIFICATION (ad-style modal)
+   ============================================================ */
+.notification-popup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: notifPopupFadeIn 0.2s ease-out;
+}
+
+@keyframes notifPopupFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.notification-popup-card {
+  position: relative;
+  background: #fff;
+  border-radius: 14px;
+  padding: 32px 28px 24px;
+  width: min(90vw, 380px);
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  animation: notifPopupPopIn 0.22s ease-out;
+}
+
+@keyframes notifPopupPopIn {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.notification-popup-close-icon {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: #888;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 50%;
+}
+
+.notification-popup-close-icon:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.notification-popup-icon {
+  font-size: 40px;
+  margin-bottom: 8px;
+}
+
+.notification-popup-title {
+  margin: 4px 0 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.notification-popup-message {
+  margin: 0 0 22px;
+  font-size: 14px;
+  color: #555;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.notification-popup-ok-btn {
+  background: #1976d2;
+  color: #fff;
+  border: none;
+  padding: 10px 32px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notification-popup-ok-btn:hover {
+  background: #1560ac;
+}
+
+
+.supplements-buttons {
+  /* position right side and support mobile */
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: relative;
+}
+
+
+
+/* Supplement Action Buttons Container */
+.supplement-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+/* Common Button Styling inside Supplement Actions */
+.supplement-action button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background-color: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+/* Hover Effect */
+.supplement-action button:hover {
+  background-color: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+/* Save / Primary Button specific style (Optional) */
+.supplement-action button:last-child:not(:first-child), 
+.supplement-action button[disabled] {
+
+}
+
+/* Icon Margin Helper (if needed) */
+.icon-mr-6 {
+  margin-right: 6px;
+  
 }

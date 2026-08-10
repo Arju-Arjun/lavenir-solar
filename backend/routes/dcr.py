@@ -2,12 +2,11 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, User, PermissionRequest, CustomerProject, DCRCertificate, CustomerAuditLog
 from datetime import datetime
-import cloudinary
-import cloudinary.uploader
 import json
 from utils import (
     check_permission, 
-    delete_cloudinary_file,
+    delete_r2_file,
+    upload_to_r2,
     handle_blueprint_check_access,
     handle_blueprint_request_access,
     get_module_folder_path,
@@ -66,75 +65,86 @@ def get_dcr_certificate(customer_id):
 @dcr_bp.route('/<string:customer_id>/', methods=['POST'])
 @jwt_required()
 def save_dcr_certificate(customer_id):
-    current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
-    is_admin = user and user.role and user.role.strip().lower() == 'admin'
+    try:
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+        is_admin = user and user.role and user.role.strip().lower() == 'admin'
 
-    customer = CustomerProject.query.filter_by(customer_id=customer_id).first()
-    if not customer:
-        return jsonify({"message": "Customer record could not be resolved."}), 404
+        customer = CustomerProject.query.filter_by(customer_id=customer_id).first()
+        if not customer:
+            return jsonify({"message": "Customer record could not be resolved."}), 404
 
-    # Centralized storage folder for this customer + module, e.g.:
-    # lavenir/JohnDoe_1023/dcr
-    folder_path = get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
+        # Centralized storage folder for this customer + module, e.g.:
+        # lavenir/JohnDoe_1023/dcr
+        folder_path = get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
 
-    dcr = DCRCertificate.query.filter_by(customer_project_id=customer.id).first()
-    action_type = "UPDATE" if dcr else "CREATE"
+        dcr = DCRCertificate.query.filter_by(customer_project_id=customer.id).first()
+        action_type = "UPDATE" if dcr else "CREATE"
 
-    if not is_admin and not check_permission(current_user_id, 'update', MODULE_NAME):
-        return jsonify({"error": "Administrative block: Security matrix context lacks required write clearance parameters."}), 403
+        if not is_admin and not check_permission(current_user_id, 'update', MODULE_NAME):
+            return jsonify({"error": "Administrative block: Security matrix context lacks required write clearance parameters."}), 403
 
-    if not dcr:
-        dcr = DCRCertificate(customer_project_id=customer.id, created_by=current_user_id)
-        db.session.add(dcr)
+        if not dcr:
+            dcr = DCRCertificate(customer_project_id=customer.id, created_by=current_user_id)
+            db.session.add(dcr)
 
-    changes = {}
+        changes = {}
 
-    for field in ['certificate_received', 'certificate_claimed', 'certificate_sold']:
-        if field in request.form:
-            old_val = getattr(dcr, field)
-            new_val = str_to_bool(request.form.get(field))
-            if old_val != new_val:
-                changes[field] = {"old": old_val, "new": new_val}
-                setattr(dcr, field, new_val)
+        for field in ['certificate_received', 'certificate_claimed', 'certificate_sold']:
+            if field in request.form:
+                old_val = getattr(dcr, field)
+                new_val = str_to_bool(request.form.get(field))
+                if old_val != new_val:
+                    changes[field] = {"old": old_val, "new": new_val}
+                    setattr(dcr, field, new_val)
 
-    if 'comments' in request.form:
-        new_comments = request.form.get('comments')
-        old_comments = getattr(dcr, 'comments') or ""
-        if old_comments != new_comments:
-            changes['comments'] = {"old": old_comments, "new": new_comments}
-            dcr.comments = new_comments
+        if 'comments' in request.form:
+            new_comments = request.form.get('comments')
+            old_comments = getattr(dcr, 'comments') or ""
+            if old_comments != new_comments:
+                changes['comments'] = {"old": old_comments, "new": new_comments}
+                dcr.comments = new_comments
 
-    if 'certificate_file' in request.files:
-        file_obj = request.files['certificate_file']
-        if file_obj and file_obj.filename != '':
-            old_file_url = dcr.certificate_file
-            if old_file_url:
-                delete_cloudinary_file(old_file_url, folder_path)
+        if 'certificate_file' in request.files:
+            file_obj = request.files['certificate_file']
+            if file_obj and file_obj.filename != '':
+                old_file_url = dcr.certificate_file
 
-            # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
-            # extension automatically), giving lavenir/{customer}_{id}/dcr/{doctype}_{id}.{ext}
-            public_id = f"{sanitize_path_segment('certificate_file')}_{sanitize_path_segment(customer.customer_id)}"
-            upload_res = cloudinary.uploader.upload(
-                file_obj, folder=folder_path, public_id=public_id, overwrite=True, resource_type="raw"
+                # Upload the replacement first and only delete the old file
+                # once the new one is confirmed on R2, so a failed upload
+                # never leaves the customer with no file at all.
+                ext = file_obj.filename.rsplit('.', 1)[-1] if '.' in file_obj.filename else 'bin'
+                object_key = (
+                    f"{folder_path}/{sanitize_path_segment('certificate_file')}"
+                    f"_{sanitize_path_segment(customer.customer_id)}.{ext}"
+                )
+                new_file_url = upload_to_r2(file_obj, object_key, content_type=file_obj.mimetype)
+                if old_file_url:
+                    delete_r2_file(old_file_url)
+                changes['certificate_file'] = {"old": old_file_url, "new": new_file_url}
+                dcr.certificate_file = new_file_url
+
+        old_work_done = dcr.work_done
+        dcr.work_done = "Completed" if (dcr.certificate_received and dcr.certificate_file) else "Pending"
+        if old_work_done != dcr.work_done:
+            changes['work_done'] = {"old": old_work_done, "new": dcr.work_done}
+
+        dcr.updated_by = current_user_id
+        dcr.updated_at = datetime.utcnow()
+
+        if changes or action_type == "CREATE":
+            audit_log = CustomerAuditLog(
+                customer_project_id=customer.id,
+                user_id=current_user_id,
+                action=action_type,
+                module_name=MODULE_NAME,
+                changes_payload=json.dumps(changes if changes else {"initialized": True})
             )
-            changes['certificate_file'] = {"old": old_file_url, "new": upload_res['secure_url']}
-            dcr.certificate_file = upload_res['secure_url']
+            db.session.add(audit_log)
 
-    dcr.updated_by = current_user_id
-    dcr.updated_at = datetime.utcnow()
+        db.session.commit()
 
-    if changes or action_type == "CREATE":
-        audit_log = CustomerAuditLog(
-            customer_project_id=customer.id,
-            user_id=current_user_id,
-            action=action_type,
-            module_name=MODULE_NAME,
-            changes_payload=json.dumps(changes if changes else {"initialized": True})
-        )
-        db.session.add(audit_log)
-
-    dcr.work_done = "Completed" if (dcr.certificate_received and dcr.certificate_file) else "Pending"
-    db.session.commit()
-    
-    return jsonify({"message": "DCR certificate synchronized successfully", "dcr": dcr.to_dict()}), 200
+        return jsonify({"message": "DCR certificate synchronized successfully", "dcr": dcr.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Save failed: {str(e)}"}), 500

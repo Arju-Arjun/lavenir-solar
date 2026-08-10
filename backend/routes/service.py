@@ -3,12 +3,11 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Service, User, PermissionRequest, CustomerProject, CustomerAuditLog
 from datetime import datetime, timedelta
 from functools import wraps
-import cloudinary
-import cloudinary.uploader
 import json
 from utils import (
     check_permission, 
-    delete_cloudinary_file,
+    delete_r2_file,
+    upload_to_r2,
     handle_blueprint_check_access,
     handle_blueprint_request_access,
     get_module_folder_path,
@@ -172,13 +171,15 @@ def create_service(customer_id):
         for i, photo in enumerate(uploaded_photos):
             if photo and photo.filename != '':
                 try:
-                    public_id = f"photo{i + 1}_{sanitize_path_segment(customer.customer_id)}"
-                    upload_res = cloudinary.uploader.upload(
-                        photo, folder=folder_path, public_id=public_id, overwrite=True
+                    ext = photo.filename.rsplit('.', 1)[-1] if '.' in photo.filename else 'bin'
+                    object_key = (
+                        f"{folder_path}/{sanitize_path_segment('photo' + str(i + 1))}"
+                        f"_{sanitize_path_segment(customer.customer_id)}.{ext}"
                     )
-                    photo_urls_list.append(upload_res['secure_url'])
+                    new_url = upload_to_r2(photo, object_key, content_type=photo.mimetype)
+                    photo_urls_list.append(new_url)
                 except Exception as ce:
-                    print(f"Cloudinary upload failed: {str(ce)}")
+                    print(f"R2 upload failed: {str(ce)}")
 
     new_service = Service(
         customer_project_id=customer.id,
@@ -314,13 +315,15 @@ def update_service(service_id):
         for i, photo in enumerate(uploaded_photos):
             if photo and photo.filename != '':
                 try:
-                    public_id = f"photo{start_index + i}_{sanitize_path_segment(customer.customer_id)}"
-                    upload_res = cloudinary.uploader.upload(
-                        photo, folder=folder_path, public_id=public_id, overwrite=True
+                    ext = photo.filename.rsplit('.', 1)[-1] if '.' in photo.filename else 'bin'
+                    object_key = (
+                        f"{folder_path}/{sanitize_path_segment('photo' + str(start_index + i))}"
+                        f"_{sanitize_path_segment(customer.customer_id)}.{ext}"
                     )
-                    new_urls.append(upload_res['secure_url'])
+                    new_url = upload_to_r2(photo, object_key, content_type=photo.mimetype)
+                    new_urls.append(new_url)
                 except Exception as ce:
-                    print(f"Cloudinary append step error: {str(ce)}")
+                    print(f"R2 append step error: {str(ce)}")
         if new_urls:
             photo_urls_list.extend(new_urls)
             changes['images'] = {"added": new_urls}
@@ -336,7 +339,7 @@ def update_service(service_id):
             
             for img_url in removed_list:
                 try:
-                    delete_cloudinary_file(img_url, folder_path)
+                    delete_r2_file(img_url)
                 except Exception as inner_e:
                     print(f"Isolated asset drop breakdown: {str(inner_e)}")
         except Exception as e:
@@ -377,17 +380,13 @@ def delete_service(service_id):
         return jsonify({"message": "No service metadata found matching target configuration key."}), 404
 
     customer = CustomerProject.query.get(service.customer_project_id)
-    folder_path = (
-        get_module_folder_path(customer.customer_name, customer.customer_id, FOLDER_MODULE_NAME)
-        if customer else None
-    )
 
-    if service.images and folder_path:
+    if service.images:
         try:
             image_urls = json.loads(service.images)
             for url in image_urls:
                 try:
-                    delete_cloudinary_file(url, folder_path)
+                    delete_r2_file(url)
                 except Exception as inner_e:
                     print(f"Isolated deletion asset cleanup skip: {str(inner_e)}")
         except Exception as e:

@@ -52,6 +52,43 @@ async function postRequest(path, body) {
   return res.json();
 }
 
+async function putRequest(path) {
+  const token = localStorage.getItem("token");
+
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "PUT",
+    headers: {
+      Authorization: token ? `Bearer ${token}` : "",
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    let errorMessage = `Request failed (${res.status})`;
+
+    try {
+      const error = await res.json();
+      errorMessage = error.message || errorMessage;
+    } catch (_) {}
+
+    throw new Error(errorMessage);
+  }
+
+  return res.json();
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              NOTIFICATIONS API                             */
+/* -------------------------------------------------------------------------- */
+
+export const notificationsApi = {
+  // Everything still owed to this user as a center-screen popup, oldest first.
+  getPendingPopups: () => request("/notifications/popups/pending"),
+
+  // Called when the user closes a popup via X or OK.
+  markPopupSeen: (notifId) => putRequest(`/notifications/${notifId}/popup-seen`),
+};
+
 /* -------------------------------------------------------------------------- */
 /*                                  ADMIN API                                 */
 /* -------------------------------------------------------------------------- */

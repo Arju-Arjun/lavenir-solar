@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { FaHome } from 'react-icons/fa';
 import { subscribeToPush } from '../utils/push';
 import { timeAgo } from '../utils/timeAgo';
+import { notificationsApi } from '../utils/dashboardApi';
+import NotificationPopup from './NotificationPopup';
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`;
 
@@ -24,6 +26,75 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingPermissionCount, setPendingPermissionCount] = useState(0);
+
+  // ---- Center-screen popup queue (separate from bell dropdown) ----
+  const [popupQueue, setPopupQueue] = useState([]);   // full pending list from server
+  const [activePopup, setActivePopup] = useState(null); // the one currently on screen
+  const nextPopupTimerRef = useRef(null);
+
+  const POPUP_ADVANCE_DELAY_MS = 700; // gap between one closing and the next appearing
+
+  // ---- Popup queue: fetch pending, merge in anything new, never touch the
+  // one currently on screen (only appended to, never replaced mid-display so
+  // an active popup never gets yanked out from under the user)
+  const fetchPendingPopups = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const data = await notificationsApi.getPendingPopups();
+      setPopupQueue(prev => {
+        const existingIds = new Set(prev.map(p => p.id));
+        const fresh = (data.popups || []).filter(p => !existingIds.has(p.id));
+        return fresh.length ? [...prev, ...fresh] : prev;
+      });
+    } catch (err) {
+      console.error('Failed to fetch pending popups:', err);
+    }
+  };
+
+  // Show the first pending popup as soon as one shows up and nothing is
+  // already on screen and no advance-delay is currently ticking (covers
+  // login / fresh page visit - first popup appears right away, no gap).
+  useEffect(() => {
+    if (!activePopup && popupQueue.length > 0 && !nextPopupTimerRef.current) {
+      setActivePopup(popupQueue[0]);
+    }
+  }, [popupQueue, activePopup]);
+
+  const handlePopupClose = (notifId) => {
+    notificationsApi.markPopupSeen(notifId).catch(err =>
+      console.error('Failed to mark popup seen:', err)
+    );
+
+    // Close immediately - background blur lifts and work resumes right away.
+    setActivePopup(null);
+
+    setPopupQueue(prev => {
+      const updated = prev.filter(p => p.id !== notifId);
+      if (updated.length > 0) {
+        nextPopupTimerRef.current = setTimeout(() => {
+          setActivePopup(updated[0]);
+          nextPopupTimerRef.current = null;
+        }, POPUP_ADVANCE_DELAY_MS);
+      }
+      return updated;
+    });
+  };
+
+  // Clear any pending advance-timer on unmount
+  useEffect(() => {
+    return () => {
+      if (nextPopupTimerRef.current) clearTimeout(nextPopupTimerRef.current);
+    };
+  }, []);
+
+  // Fetch on mount (covers login / fresh page visit) + poll every 30s so a
+  // new notification that fires while the user is mid-work also queues up.
+  useEffect(() => {
+    fetchPendingPopups();
+    const interval = setInterval(fetchPendingPopups, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const sidebarRef = useRef(null);
   const hamburgerRef = useRef(null);
@@ -166,15 +237,18 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
           >
             ☰
           </button>
-         {/* <span className="company-branding-title" onClick={() => navigateTo('/')}>
-          <span className="highlight-l">L</span>avenir solar
-        </span> */}
+        
 
         <span className="company-branding-title" onClick={() => navigateTo('/')}>
-          <span className="brand-text">
-            Lavenir <span className="brand-solar">Solar</span>
-          </span>
+        <img 
+          src="/assets/logo1.png" 
+          alt="Lavenir Solar Logo" 
+          className="brand-logo-img" 
+        />
+        <span className="brand-text">
+          Lavenir <span className="brand-solar">Solar</span>
         </span>
+      </span>
         </div>
 
         <div className="top-bar-right">
@@ -289,6 +363,11 @@ function Layout({ user, role, onLogout, currentPath, navigateTo, children }) {
       <main className={`master-workspace-content-pane ${isSidebarOpen ? 'sidebar-shifted' : ''}`}>
         {children}
       </main>
+
+      {/* CENTER-SCREEN POPUP QUEUE - shows one at a time, regardless of page */}
+      {activePopup && (
+        <NotificationPopup popup={activePopup} onClose={handlePopupClose} />
+      )}
     </div>
   );
 }

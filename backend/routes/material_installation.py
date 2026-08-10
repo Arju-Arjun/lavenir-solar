@@ -2,13 +2,13 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import MaterialInstallation, db, User, CustomerProject, CustomerAuditLog, SiteVisit
 from datetime import datetime
-import cloudinary
-import cloudinary.uploader
+from sqlalchemy.exc import IntegrityError
 import json
 from utils import (
     check_permission, 
     permission_allows_for_user,
-    delete_cloudinary_file,
+    delete_r2_file,
+    upload_to_r2,
     handle_blueprint_check_access,
     handle_blueprint_request_access,
     get_module_folder_path,
@@ -58,6 +58,9 @@ def _parse_bool(value):
     if value is None:
         return False
     return str(value).strip().lower() in ['true', '1', 'yes', 'on']
+
+def _file_ext(filename, default='bin'):
+    return filename.rsplit('.', 1)[-1] if '.' in filename else default
 
 @installation_bp.route('/<string:customer_id>/', methods=['GET'])
 @jwt_required()
@@ -152,27 +155,34 @@ def create_material_installation(customer_id):
 
     doc_file = files.get('installation_document')
     if doc_file and doc_file.filename != '':
-        # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
-        # extension automatically), giving lavenir/{customer}_{id}/materialinstallation/{doctype}_{id}.{ext}
-        public_id = f"{sanitize_path_segment('installation_document')}_{sanitize_path_segment(customer_project.customer_id)}"
-        upload_res = cloudinary.uploader.upload(
-            doc_file, folder=folder_path, public_id=public_id, overwrite=True, resource_type="auto"
+        ext = _file_ext(doc_file.filename)
+        object_key = (
+            f"{folder_path}/{sanitize_path_segment('installation_document')}"
+            f"_{sanitize_path_segment(customer_project.customer_id)}.{ext}"
         )
-        installation.installation_document = upload_res['secure_url']
+        installation.installation_document = upload_to_r2(doc_file, object_key, content_type=doc_file.mimetype)
 
     uploaded_urls = []
     for i, photo in enumerate(files.getlist('installation_images')):
         if photo and photo.filename != '':
-            public_id = f"photo{i + 1}_{sanitize_path_segment(customer_project.customer_id)}"
-            upload_res = cloudinary.uploader.upload(
-                photo, folder=folder_path, public_id=public_id, overwrite=True
-            )
-            uploaded_urls.append(upload_res['secure_url'])
+            ext = _file_ext(photo.filename, default='jpg')
+            object_key = f"{folder_path}/photo{i + 1}_{sanitize_path_segment(customer_project.customer_id)}.{ext}"
+            uploaded_urls.append(upload_to_r2(photo, object_key, content_type=photo.mimetype))
     installation.installation_images = json.dumps(uploaded_urls)
 
     installation.work_done = "Completed" if (electrical_installed and structure_installed and len(uploaded_urls) > 0) else "Pending"
     
     db.session.add(installation)
+    try:
+        # Flush (not commit) so the unique constraint on customer_project_id
+        # is checked now. If a concurrent request already created the
+        # installation row for this customer between our earlier
+        # `material_installation_rel` check and this INSERT, this raises
+        # IntegrityError instead of racing to create a second row.
+        db.session.flush()
+    except IntegrityError:
+        db.session.rollback()
+        return update_material_installation(customer_id)
 
     audit_log = CustomerAuditLog(
         customer_project_id=customer_project.id,
@@ -241,32 +251,32 @@ def update_material_installation(customer_id):
     doc_file = files.get('installation_document')
     if doc_file and doc_file.filename != '':
         old_doc = installation.installation_document
-        delete_cloudinary_file(old_doc, folder_path)
-        public_id = f"{sanitize_path_segment('installation_document')}_{sanitize_path_segment(customer_project.customer_id)}"
-        upload_res = cloudinary.uploader.upload(
-            doc_file, folder=folder_path, public_id=public_id, overwrite=True, resource_type="auto"
+        delete_r2_file(old_doc)
+        ext = _file_ext(doc_file.filename)
+        object_key = (
+            f"{folder_path}/{sanitize_path_segment('installation_document')}"
+            f"_{sanitize_path_segment(customer_project.customer_id)}.{ext}"
         )
-        track('installation_document', old_doc, upload_res['secure_url'])
-        installation.installation_document = upload_res['secure_url']
+        new_doc_url = upload_to_r2(doc_file, object_key, content_type=doc_file.mimetype)
+        track('installation_document', old_doc, new_doc_url)
+        installation.installation_document = new_doc_url
 
     existing_images = json.loads(installation.installation_images) if installation.installation_images else []
     new_uploaded_urls = []
     # Continue numbering from where the existing image list left off so each
-    # image gets a unique public_id within the same module folder.
+    # image gets a unique object key within the same module folder.
     start_index = len(existing_images) + 1
     for i, photo in enumerate(files.getlist('installation_images')):
         if photo and photo.filename != '':
-            public_id = f"photo{start_index + i}_{sanitize_path_segment(customer_project.customer_id)}"
-            upload_res = cloudinary.uploader.upload(
-                photo, folder=folder_path, public_id=public_id, overwrite=True
-            )
-            new_uploaded_urls.append(upload_res['secure_url'])
+            ext = _file_ext(photo.filename, default='jpg')
+            object_key = f"{folder_path}/photo{start_index + i}_{sanitize_path_segment(customer_project.customer_id)}.{ext}"
+            new_uploaded_urls.append(upload_to_r2(photo, object_key, content_type=photo.mimetype))
 
     removed_images = json.loads(form.get('removed_images', '[]')) if 'removed_images' in form else []
     final_images = [img for img in existing_images if img not in removed_images] + new_uploaded_urls
 
     for removed_url in removed_images:
-        delete_cloudinary_file(removed_url, folder_path)
+        delete_r2_file(removed_url)
 
     if new_uploaded_urls or removed_images:
         changes['installation_images'] = {"added": new_uploaded_urls, "removed": removed_images}
@@ -309,15 +319,11 @@ def delete_material_installation(customer_id):
     if not customer_project or not customer_project.material_installation_rel:
         return jsonify({"error": "Material installation details logs structure missing."}), 404
 
-    # Centralized storage folder for this customer + module (used to resolve
-    # public_ids for deletion).
-    folder_path = get_module_folder_path(customer_project.customer_name, customer_project.customer_id, FOLDER_MODULE_NAME)
-
     installation = customer_project.material_installation_rel
-    delete_cloudinary_file(installation.installation_document, folder_path)
+    delete_r2_file(installation.installation_document)
     if installation.installation_images:
         for img in json.loads(installation.installation_images):
-            delete_cloudinary_file(img, folder_path)
+            delete_r2_file(img)
 
     db.session.delete(installation)
 

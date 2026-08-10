@@ -1,31 +1,26 @@
-"""
-Centralized notification business rules for maintenance service workflow
-and KSEB feasibility tracking.
-
-All delays/gaps below are PRODUCTION values. Flip TESTING_MODE to True to
-compress EVERY delay/gap/lead-time in this file — including the 6-month
-maintenance reminders and the 9-day feasibility ramp — down to ~30s for
-manual testing. The 8 AM-12 PM / 8 AM-midnight IST send windows are also
-bypassed (treated as 0-24) under TESTING_MODE, so test notifications aren't
-blocked by time of day.
-
-Flip TESTING_MODE back to False before deploying — the real month/day
-values (FIRST_MAINTENANCE_DUE_MONTHS, RENEWAL_DUE_MONTHS,
-FEASIBILITY_TRIGGER_DAYS, DUE_REMINDER_LEAD_DAYS, DUE_REMINDER_FINAL_DAYS,
-the 8 AM windows) are untouched in code and take over automatically.
-"""
-
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from dateutil.relativedelta import relativedelta  # pip install python-dateutil (if not already a dependency)
 from models import db, Notification, CustomerProject, Service, KSEB, KsebRegistrationCompletion, DCRCertificate, SiteVisit, User
+
+
+def clear_resolved_popups(customer, notif_type):
+   
+    updated = Notification.query.filter(
+        Notification.customer_project_id == customer.id,
+        Notification.notif_type == notif_type,
+        Notification.popup_seen == False,
+        Notification.popup_resolved == False
+    ).update({"popup_resolved": True}, synchronize_session=False)
+    if updated:
+        db.session.commit()
 from utils import check_all_modules_complete, get_all_admin_ids, get_users_with_permission, get_users_with_permission_multi
 from routes.push import create_notification_and_push
 
 # ---------------------------------------------------------------------------
 # TESTING TOGGLE
 # ---------------------------------------------------------------------------
-TESTING_MODE = True
+TESTING_MODE = False
 _FAST_DELAY_SECONDS = 30
 _FAST_GAP_SECONDS = 30
 
@@ -40,6 +35,7 @@ NOTIF_TYPE_TAB_MAP = {
     "fee_pending": "completion",
     "dcr_delay": "dcr",
     "material_items_pending": "material-delivery",
+    "important_material_items_pending": "material-delivery",
     "installation_table_pending": "installation",
     "mnre_installation_pending": "mnre-installation",
     "material_usage_pending": "installation",
@@ -68,6 +64,7 @@ NOTIF_TYPE_MODULE_MAP = {
     "fee_pending": "KSEB Registration & Completion",
     "dcr_delay": "DCR Details",
     "material_items_pending": "Material Delivery",
+    "important_material_items_pending": "Material Delivery",
     "installation_table_pending": "Material Installation",
     "mnre_installation_pending": "MNRE Installation",
     "material_usage_pending": "Material Installation",
@@ -93,7 +90,7 @@ NOTIF_TYPE_MODULE_MAP = {
 # window — narrower than every other notif_type's window below.
 FIRST_MAINTENANCE_DUE_MONTHS = 6
 RENEWAL_DUE_MONTHS = 6
-DUE_REMINDER_LEAD_DAYS = 7
+DUE_REMINDER_LEAD_DAYS = 15
 DUE_REMINDER_FINAL_DAYS = 2
 DUE_REMINDER_WINDOW_START_HOUR = 0 if TESTING_MODE else 8    # 8 AM IST (bypassed to all-day under TESTING_MODE)
 DUE_REMINDER_WINDOW_END_HOUR = 24 if TESTING_MODE else 12    # 12 PM noon IST (bypassed to all-day under TESTING_MODE)
@@ -143,9 +140,48 @@ MNRE_INSTALLATION_REPEAT_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 12
 MATERIAL_USAGE_PENDING_DELAY_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else 3600     # 1 hour
 MATERIAL_USAGE_PENDING_REPEAT_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 86400  # once a day
 
-# ---- 11. Complaint pending (open complaint untouched -> nudge) ----
-COMPLAINT_PENDING_DELAY_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else 2 * 86400
-COMPLAINT_PENDING_REPEAT_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 2 * 86400
+# ---- 11. Important material items pending (subset of the catalog -- Inverter,
+# Solar Panels, Energy Meter, Meter Box, Earthing Compound, ACDB, DCDB,
+# 1.5x1.5 GP Pipe -- still missing or at 0 qty, after at least one item on the
+# delivery has already been given a quantity). Distinct from #7 above: #7
+# fires while the item list is entirely untouched (nothing added yet); this
+# one takes over once that stops being true, so the two never fire for the
+# same state at once.
+# 1h after the first item gets a quantity -> 1st notification, then a 6h gap
+# to the 2nd, then it settles into 2x/day (matching the rest of this file's
+# cadence) until every important item shows qty > 0.
+IMPORTANT_ITEMS_FIRST_DELAY_SECONDS = _FAST_DELAY_SECONDS if TESTING_MODE else 3600         # 1 hour
+IMPORTANT_ITEMS_SECOND_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 6 * 3600         # 6 hours
+IMPORTANT_ITEMS_REPEAT_GAP_SECONDS = _FAST_GAP_SECONDS if TESTING_MODE else 12 * 3600        # 2x/day thereafter
+
+# Each entry: (display name used in the notification body, [substrings that
+# must ALL appear in material_name, case-insensitive]). Multi-keyword AND
+# matching (rather than a single substring) because the real catalog entries
+# are specific variants, e.g. "Inverter 8kw", "ACDB 3 Phase-5KW", "16g,
+# 1.5x1.5 GP pipe" -- and a single loose substring like "1.5x1.5" would also
+# false-match unrelated rows such as "End Cap 1.5x1.5".
+IMPORTANT_MATERIAL_ITEMS = [
+    ("Inverter", ["inverter"]),
+    ("Solar Panels", ["solar", "panel"]),
+    ("Energy Meter", ["energy", "meter"]),
+    ("Meter Box", ["meter", "box"]),
+    ("Earthing Compound", ["earthing", "compound"]),
+    ("ACDB", ["acdb"]),
+    ("DCDB", ["dcdb"]),
+    ("1.5x1.5 GP Pipe", ["1.5x1.5", "gp", "pipe"]),
+]
+
+# ---- 12. Complaint pending (open complaint untouched -> priority-escalating nudge) ----
+# CHANGED: this used to be a flat "2 days elapsed, then every 2 days"
+# cadence (COMPLAINT_PENDING_DELAY_SECONDS/REPEAT_GAP_SECONDS). Replaced by
+# a per-priority schedule that lives on the Complaint model itself
+# (Complaint.REMINDER_SCHEDULE / current_reminder_rate() in models.py):
+#   Low:    3 days elapsed -> 1/day
+#   Medium: 2 days -> 1/day, 7 days -> 2/day
+#   High:   1 day  -> 1/day, 5 days -> 2/day
+#   Urgent: 1 day  -> 3/day, 5 days -> 4/day
+# "Days elapsed" counts from Complaint.reminder_anchor_at, which resets on
+# reopen (see Complaint.reset_reminder_clock). See check_complaint_pending().
 
 # ---------------------------------------------------------------------------
 # GENERAL NOTIFICATION WINDOW (Admins should only be pinged 8 AM - midnight IST)
@@ -209,7 +245,7 @@ def ordinal(n):
     return f"{n}{suffix}"
 
 
-def _dispatch_to_module_staff(customer, title, body, notif_type, gap_seconds):
+def _dispatch_to_module_staff(customer, title, body, notif_type, gap_seconds, module_lookup_type=None):
     """
     Core targeting + throttle + push logic: admins + any staff holding
     'update' permission on the module(s) this notif_type belongs to
@@ -218,18 +254,26 @@ def _dispatch_to_module_staff(customer, title, body, notif_type, gap_seconds):
     8 AM-midnight window) and check_due_date_reminder() (its own,
     possibly narrower, window) — callers are responsible for their own
     window check before calling this.
+
+    module_lookup_type: pass this when notif_type itself is unique per-row
+    (e.g. "complaint_pending_42", needed so can_send_today()'s throttle is
+    tracked per-complaint, not shared across every complaint for a
+    customer) but you still want NOTIF_TYPE_MODULE_MAP/NOTIF_TYPE_TAB_MAP
+    resolved against the *base* type ("complaint_pending"). Defaults to
+    notif_type when omitted (existing behaviour, unchanged).
     """
     if not can_send_today(customer.id, notif_type, gap_seconds):
         return
 
-    module_name = NOTIF_TYPE_MODULE_MAP.get(notif_type)
+    lookup_type = module_lookup_type or notif_type
+    module_name = NOTIF_TYPE_MODULE_MAP.get(lookup_type)
     if module_name:
         module_names = [module_name] if isinstance(module_name, str) else module_name
         target_ids = get_users_with_permission_multi(module_names, 'update')
     else:
         target_ids = get_all_admin_ids()
 
-    tab = NOTIF_TYPE_TAB_MAP.get(notif_type, "service")
+    tab = NOTIF_TYPE_TAB_MAP.get(lookup_type, "service")
     for user_id in target_ids:
         create_notification_and_push(
             title=title,
@@ -241,11 +285,11 @@ def _dispatch_to_module_staff(customer, title, body, notif_type, gap_seconds):
         )
 
 
-def notify_module_staff(customer, title, body, notif_type, gap_seconds):
+def notify_module_staff(customer, title, body, notif_type, gap_seconds, module_lookup_type=None):
     """Gate on the general 8 AM-midnight window, then dispatch."""
     if not is_within_notification_window():
         return
-    _dispatch_to_module_staff(customer, title, body, notif_type, gap_seconds)
+    _dispatch_to_module_staff(customer, title, body, notif_type, gap_seconds, module_lookup_type=module_lookup_type)
 
 
 def notify_user(user_id, title, body, url="/"):
@@ -276,6 +320,27 @@ def notify_assignee_and_admins(assignee_id, title, body, url="/"):
     target_ids = set(get_all_admin_ids())
     if assignee_id:
         target_ids.add(assignee_id)
+    for user_id in target_ids:
+        create_notification_and_push(
+            title=title,
+            body=body,
+            url=url,
+            notif_type="complaint_assigned",
+            user_id=user_id
+        )
+
+
+def notify_assignees_and_admins(assignee_ids, title, body, url="/"):
+    """Multi-assignee counterpart to notify_assignee_and_admins() (added -
+    complaints can now have more than one assignee). Sends exactly one
+    alert per unique user across admins ∪ assignee_ids, rather than looping
+    notify_assignee_and_admins() per assignee, which would re-notify every
+    admin once per assignee on the same event.
+    """
+    target_ids = set(get_all_admin_ids())
+    for aid in (assignee_ids or []):
+        if aid:
+            target_ids.add(aid)
     for user_id in target_ids:
         create_notification_and_push(
             title=title,
@@ -460,16 +525,16 @@ def check_feasibility_delay(customer):
     latest_visit = (
         SiteVisit.query
         .filter_by(customer_project_id=customer.id)
-        .order_by(SiteVisit.created_at.desc())
+        .order_by(SiteVisit.visited_date.desc())
         .first()
     )
-    if not latest_visit or not latest_visit.created_at:
+    if not latest_visit or not latest_visit.visited_date:
         return
 
     latest_kseb = (
         KSEB.query
         .filter_by(customer_project_id=customer.id)
-        .order_by(KSEB.created_at.desc())
+        .order_by(KSEB.payment_date.desc())
         .first()
     )
     if latest_kseb and latest_kseb.feasibility_status == 'Complete':
@@ -494,13 +559,13 @@ def check_registration_delay(customer):
     latest_kseb = (
         KSEB.query
         .filter_by(customer_project_id=customer.id)
-        .order_by(KSEB.created_at.desc())
+        .order_by(KSEB.payment_date.desc())
         .first()
     )
     if not latest_kseb or latest_kseb.feasibility_status != 'Complete':
         return
 
-    feasibility_done_at = _as_datetime(latest_kseb.updated_at)
+    feasibility_done_at = _as_datetime(latest_kseb.payment_date)
     if not feasibility_done_at:
         return
 
@@ -547,9 +612,6 @@ def check_fee_pending(customer):
 def check_dcr_delay(customer):
    
     delivery = customer.material_delivery_rel
-    # Trigger is specifically "solar panel delivered" (panel_delivered), not
-    # delivery.work_done == 'Completed' (which also requires electrical +
-    # structure delivered + images) - DCR only cares about the panel.
     if not delivery or not delivery.panel_delivered:
         return
 
@@ -600,16 +662,95 @@ def check_material_items_pending(customer):
     )
 
 
-def check_installation_table_pending(customer):
+def _find_important_item_match(items, keywords):
     """
-    Ella delivered material items-um work_done == 'Completed' aayittu
-    INSTALLATION_TABLE_DELAY_SECONDS (5h) kazhinjittum Material Installation
-    details table fill cheythittillenkil, 2x/day alert.
+    Returns the first item in `items` whose material_name contains every
+    string in `keywords` (case-insensitive substring match, AND'd together),
+    or None if no row in the delivery matches this important item at all.
+    """
+    for item in items:
+        name = (item.material_name or "").lower()
+        if all(kw in name for kw in keywords):
+            return item
+    return None
 
-    NOTE: "Installation kazhinju" ennathinu dedicated field onnum
-    illaathathinal, ella items-um use cheythu (work_done == 'Completed')
-    ennathine proxy aayi edukkunnu.
+
+def check_important_material_items_pending(customer):
     """
+    Once the delivery itself is confirmed complete (same base condition as
+    check_material_items_pending: electrical + panel + structure all
+    delivered) AND at least one item on the list has actually been given a
+    quantity (i.e. check_material_items_pending's own trigger condition no
+    longer holds), check the fixed set of "important" items in
+    IMPORTANT_MATERIAL_ITEMS. Any of them that are either missing from the
+    table entirely, or present but still at 0/blank quantity, get named in
+    the notification.
+
+    Cadence: 1h after the first item got a quantity -> 1st notification,
+    then a 6h gap -> 2nd, then 2x/day thereafter until every important item
+    shows qty > 0 (see IMPORTANT_ITEMS_*_SECONDS above).
+    """
+    delivery = customer.material_delivery_rel
+    if not delivery or not delivery.electrical_delivered or not delivery.panel_delivered or not delivery.structure_delivered:
+        return  # delivery itself not confirmed complete yet - same gate as check_material_items_pending
+
+    items = delivery.material_items
+    if not items:
+        return  # nothing on the table at all yet - check_material_items_pending covers this state
+
+    items_with_qty = [item for item in items if (item.quantity or 0) > 0]
+    if not items_with_qty:
+        return  # still completely untouched - check_material_items_pending owns this state, not us
+
+    missing_names = []
+    for display_name, keywords in IMPORTANT_MATERIAL_ITEMS:
+        match = _find_important_item_match(items, keywords)
+        if not match or (match.quantity or 0) <= 0:
+            missing_names.append(display_name)
+    if not missing_names:
+        clear_resolved_popups(customer, "important_material_items_pending")
+        return  # every important item is present with qty > 0
+
+    # Anchor off the earliest point any item actually got a quantity, since
+    # that's the "an item was added" trigger moment referred to above -
+    # item.created_at is set for every row up front (default catalog is
+    # seeded in one go), so it isn't useful as an anchor here.
+    item_times = [
+        _as_datetime(item.updated_at) or _as_datetime(item.created_at)
+        for item in items_with_qty
+    ]
+    item_times = [t for t in item_times if t]
+    if not item_times:
+        return
+    first_added_at = min(item_times)
+
+    elapsed = (datetime.utcnow() - first_added_at).total_seconds()
+    if elapsed < IMPORTANT_ITEMS_FIRST_DELAY_SECONDS:
+        return  # not even 1h in since the first item got a quantity yet
+
+    sent_count = Notification.query.filter_by(
+        customer_project_id=customer.id,
+        notif_type="important_material_items_pending"
+    ).count()
+
+    if sent_count == 0:
+        gap_seconds = IMPORTANT_ITEMS_FIRST_DELAY_SECONDS   # unused by can_send_today (no prior row), kept for clarity
+    elif sent_count == 1:
+        gap_seconds = IMPORTANT_ITEMS_SECOND_GAP_SECONDS    # 6h after the 1st
+    else:
+        gap_seconds = IMPORTANT_ITEMS_REPEAT_GAP_SECONDS    # settles into 2x/day
+
+    notify_module_staff(
+        customer,
+        title="Important Material Items Pending!",
+        body=f"{customer.customer_name}'s material delivery is missing quantities for: {', '.join(missing_names)}.",
+        notif_type="important_material_items_pending",
+        gap_seconds=gap_seconds
+    )
+
+
+def check_installation_table_pending(customer):
+   
     delivery = customer.material_delivery_rel
     if not delivery or not delivery.material_items:
         return
@@ -624,9 +765,6 @@ def check_installation_table_pending(customer):
     installed_at = max(item_times)
 
     installation = customer.material_installation_rel
-    # MaterialInstallation gets an auto-created stub row for every customer
-    # at customer-creation time, so a bare existence check would always be
-    # true - check whether the row actually holds real installation data.
     if installation and (
         installation.electrical_installed
         or installation.structure_installed
@@ -649,15 +787,7 @@ def check_installation_table_pending(customer):
 
 
 def check_material_usage_pending(customer):
-    """
-    Material Installation-il Electrical Installation allenkil Structure
-    Installation (eathenkilum onnu) complete aayittu
-    MATERIAL_USAGE_PENDING_DELAY_SECONDS (1h) kazhinjittum, material items
-    table-il eathenkilum item-inte used_quantity ippozhum 0 aanenkil -> alert.
-
-    NOTE: material_items belongs to MaterialDelivery
-    (customer.material_delivery_rel.material_items), not MaterialInstallation.
-    """
+    
     installation = customer.material_installation_rel
     if not installation or not (installation.electrical_installed or installation.structure_installed):
         return  # neither Electrical nor Structure installation marked complete yet
@@ -687,22 +817,19 @@ def check_material_usage_pending(customer):
 
 
 def check_mnre_installation_pending(customer):
-    """
-    Material Installation-il Electrical Installation AND Structure
-    Installation randum True aayittu MNRE_INSTALLATION_DELAY_SECONDS (1 day)
-    kazhinjittum, MNRE Installation-nte "Installation Status" 'Completed'
-    allenkil -> alert, 2x/day.
-    """
+  
     installation = customer.material_installation_rel
     if not installation or not (installation.electrical_installed and installation.structure_installed):
+        clear_resolved_popups(customer, "mnre_installation_pending")  # not even applicable yet
         return  # material installation (electrical + structure) itself not done yet
 
-    completed_at = _as_datetime(installation.updated_at) or _as_datetime(installation.created_at)
+    completed_at = _as_datetime(installation.installation_completion_date) or _as_datetime(installation.updated_at) or _as_datetime(installation.created_at)
     if not completed_at:
         return
 
     mnre = customer.mnre_installation_rel
     if mnre and mnre.installation_status == 'Completed':
+        clear_resolved_popups(customer, "mnre_installation_pending")  # work is done, drop any queued popup
         return  # MNRE Installation Status already complete
 
     elapsed = (datetime.utcnow() - completed_at).total_seconds()
@@ -719,63 +846,57 @@ def check_mnre_installation_pending(customer):
 
 
 def check_complaint_pending(customer):
-    """
-    Alerts on any complaint for this customer still sitting in
-    Open / Assigned / In Progress / Reopened (i.e. not Resolved or Closed)
-    more than COMPLAINT_PENDING_DELAY_SECONDS (2 days) after it last changed.
 
-    Each complaint gets its own notif_type key (f"complaint_pending_{id}")
-    so can_send_today's per-customer lookup tracks each complaint's alert
-    cadence independently instead of one complaint's recent alert silencing
-    another's on the same customer.
+    for c in customer.complaints:
+        if c.status in ('Resolved', 'Closed'):
+            clear_resolved_popups(customer, f"complaint_pending_{c.id}")
 
-    Assigned complaints ping the assigned staff member directly (they're the
-    one on the hook for it). Unassigned complaints fall back to
-    notify_module_staff so any staff with 'update' permission on Complaints
-    or Service, plus admins, can pick it up.
-
-    Stops when the complaint is marked Resolved/Closed, or whenever anyone
-    leaves a comment/update (Complaint.updated_at has onupdate=utcnow, so a
-    touch to the row resets the timer for that complaint automatically).
-    """
     open_complaints = [c for c in customer.complaints if c.status not in ('Resolved', 'Closed')]
     if not open_complaints:
         return
 
-    for complaint in open_complaints:
-        reference_time = _as_datetime(complaint.updated_at) or _as_datetime(complaint.created_at)
-        if not reference_time:
-            continue
+    if not is_within_notification_window():
+        return
 
-        elapsed = (datetime.utcnow() - reference_time).total_seconds()
-        if elapsed < COMPLAINT_PENDING_DELAY_SECONDS:
+    window_hours = NOTIFICATION_WINDOW_END_HOUR - NOTIFICATION_WINDOW_START_HOUR
+
+    for complaint in open_complaints:
+        # rate = how many reminders/day this complaint should be getting
+        # right now, from its priority + days elapsed since
+        # reminder_anchor_at (0 = hasn't crossed its first threshold yet).
+        rate = complaint.current_reminder_rate()
+        if rate <= 0:
             continue
 
         notif_type = f"complaint_pending_{complaint.id}"
-        if not is_within_notification_window():
-            continue
-        if not can_send_today(customer.id, notif_type, COMPLAINT_PENDING_REPEAT_GAP_SECONDS):
+        # Space the day's `rate` reminders evenly across the notification
+        # window's width (not a flat 24h) so e.g. Urgent's 3-4/day actually
+        # lands multiple times inside the 8AM-midnight window instead of
+        # mostly getting swallowed by is_within_notification_window().
+        gap_seconds = _FAST_GAP_SECONDS if TESTING_MODE else max(1, int((window_hours * 3600) / rate))
+
+        if not can_send_today(customer.id, notif_type, gap_seconds):
             continue
 
-        title = "Complaint Pending Action!"
+        title = f"{complaint.priority} Priority Complaint Pending!"
         body = f"{complaint.complaint_number} ({complaint.priority}) for {customer.customer_name} is still '{complaint.status}'."
+        url = f"/customer-profile/{customer.customer_id}?tab=complaints"
 
-        if complaint.assigned_to:
-            # notify_user() doesn't gate on window/gap itself, so the checks
-            # above are what actually throttle this branch.
-            notify_user(
-                complaint.assigned_to,
-                title=title,
-                body=body,
-                url=f"/customer-profile/{customer.customer_id}?tab=complaints"
-            )
+        assignees = complaint.assignees
+        if assignees:
+            # notify_user() doesn't gate on window/gap itself, so the
+            # can_send_today() check above is what actually throttles this
+            # branch (one shared check per complaint covers all its assignees).
+            for staff in assignees:
+                notify_user(staff.id, title=title, body=body, url=url)
         else:
             notify_module_staff(
                 customer,
                 title=title,
                 body=body,
                 notif_type=notif_type,
-                gap_seconds=COMPLAINT_PENDING_REPEAT_GAP_SECONDS
+                gap_seconds=gap_seconds,
+                module_lookup_type="complaint_pending"
             )
 
 
@@ -787,8 +908,7 @@ def run_daily_notification_checks():
     customers = CustomerProject.query.all()
     print(f"DEBUG run_daily_notification_checks: {len(customers)} customers to check")
 
-    # Each check gets its own try/except so one failing check for a customer
-    # doesn't skip every check after it for that customer in the same cycle.
+
     checks = [
         check_first_maintenance_due,
         check_maintenance_renewal_due,
@@ -797,6 +917,7 @@ def run_daily_notification_checks():
         check_fee_pending,
         check_dcr_delay,
         check_material_items_pending,
+        check_important_material_items_pending,
         check_installation_table_pending,
         check_material_usage_pending,
         check_mnre_installation_pending,

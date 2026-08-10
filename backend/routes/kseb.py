@@ -61,64 +61,86 @@ def get_kseb(customer_id):
 @kseb_bp.route('/<string:customer_id>/', methods=['POST'])
 @jwt_required()
 def save_kseb(customer_id):
-    current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
-    is_admin = user and user.role and user.role.strip().lower() == 'admin'
+    try:
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+        is_admin = user and user.role and user.role.strip().lower() == 'admin'
 
-    cust = CustomerProject.query.filter_by(customer_id=customer_id).first()
-    if not cust:
-        return jsonify({"message": "Customer project record not found."}), 404
+        cust = CustomerProject.query.filter_by(customer_id=customer_id).first()
+        if not cust:
+            return jsonify({"message": "Customer project record not found."}), 404
 
-    site_visit = SiteVisit.query.filter_by(customer_project_id=cust.id).first()
-    kseb_data = KSEB.query.filter_by(customer_project_id=cust.id).first()
-    action_type = "UPDATE" if kseb_data else "CREATE"
+        site_visit = SiteVisit.query.filter_by(customer_project_id=cust.id).first()
+        kseb_data = KSEB.query.filter_by(customer_project_id=cust.id).first()
+        action_type = "UPDATE" if kseb_data else "CREATE"
 
-    if not is_admin and not check_permission(current_user_id, 'update', MODULE_NAME):
-        return jsonify({"error": "Administrative block: Security matrix context lacks required write clearance parameters."}), 403
+        if not is_admin and not check_permission(current_user_id, 'update', MODULE_NAME):
+            return jsonify({"error": "Administrative block: Security matrix context lacks required write clearance parameters."}), 403
 
-    if not kseb_data:
-        kseb_data = KSEB(customer_project_id=cust.id, created_by=current_user_id)
-        db.session.add(kseb_data)
+        if not kseb_data:
+            kseb_data = KSEB(customer_project_id=cust.id, created_by=current_user_id)
+            db.session.add(kseb_data)
 
-    data = request.get_json() or {}
-    changes = {}
+        data = request.get_json() or {}
+        changes = {}
 
-    # Feasibility can only be marked Complete once the fee has been paid.
-    # Resolve the effective values (incoming payload wins over the stored
-    # value) so this check works whether fee_paid/feasibility_status are
-    # being changed together or independently in this request.
-    effective_fee_paid = data.get('fee_paid', kseb_data.fee_paid)
-    effective_feasibility_status = data.get('feasibility_status', kseb_data.feasibility_status)
-    if effective_feasibility_status == 'Complete' and not effective_fee_paid:
-        return jsonify({"error": "Feasibility status can only be marked Complete after the fee has been paid."}), 400
+        # Feasibility can only be marked Complete once the fee has been paid.
+        # Resolve the effective values (incoming payload wins over the stored
+        # value) so this check works whether fee_paid/feasibility_status are
+        # being changed together or independently in this request.
+        effective_fee_paid = data.get('fee_paid', kseb_data.fee_paid)
+        effective_feasibility_status = data.get('feasibility_status', kseb_data.feasibility_status)
+        if effective_feasibility_status == 'Complete' and not effective_fee_paid:
+            return jsonify({"error": "Feasibility status can only be marked Complete after the fee has been paid."}), 400
 
-    for field in ['ownership_status', 'ownership_comment', 'load_enhancement_status', 'load_enhancement_comment', 'feasibility_status','comments', 'fee_paid']:
-        if field in data:
-            old_val = getattr(kseb_data, field)
-            new_val = data[field]
-            if old_val != new_val:
-                changes[field] = {"old": old_val, "new": new_val}
-                setattr(kseb_data, field, new_val)
-    
-    # Workflow validation engine verification rules
-    kseb_data.work_done = "Completed" if (
-        ((site_visit and site_visit.ownership_change == 'Yes' and kseb_data.ownership_status == 'Complete') or not site_visit or site_visit.ownership_change != 'Yes') and 
-        ((site_visit and site_visit.load_enhancement == 'Yes' and kseb_data.load_enhancement_status == 'Complete') or not site_visit or site_visit.load_enhancement != 'Yes') and 
-        (kseb_data.fee_paid and kseb_data.feasibility_status == 'Complete')
-    ) else "Pending"
+        for field in ['ownership_status', 'ownership_comment', 'load_enhancement_status', 'load_enhancement_comment', 'feasibility_status', 'comments', 'fee_paid', 'payment_date', 'visiter_name']:
+            if field in data:
+                old_val = getattr(kseb_data, field)
+                new_val = data[field]
 
-    if changes or action_type == "CREATE":
-        log = CustomerAuditLog(
-            customer_project_id=cust.id,
-            user_id=current_user_id,
-            action=action_type,
-            module_name=MODULE_NAME,
-            changes_payload=json.dumps(changes if changes else {"initialized": True})
-        )
-        db.session.add(log)
+                # Parse payment_date string from frontend into a datetime object
+                if field == 'payment_date':
+                    if new_val:
+                        try:
+                            new_val = datetime.strptime(new_val, '%Y-%m-%d')
+                        except ValueError:
+                            new_val = None
+                    else:
+                        new_val = None
 
-    kseb_data.updated_by = current_user_id
-    kseb_data.updated_at = datetime.utcnow()
-    db.session.commit()
-    
-    return jsonify({"message": "KSEB record synchronized successfully", "kseb": kseb_data.to_dict()}), 200
+                if old_val != new_val:
+                    # Convert datetime objects to ISO strings for safe JSON logging
+                    changes[field] = {
+                        "old": old_val.isoformat() if isinstance(old_val, datetime) else old_val,
+                        "new": new_val.isoformat() if isinstance(new_val, datetime) else new_val
+                    }
+                    setattr(kseb_data, field, new_val)
+
+        # Workflow validation engine verification rules
+        old_work_done = kseb_data.work_done
+        kseb_data.work_done = "Completed" if (
+            ((site_visit and site_visit.ownership_change == 'Yes' and kseb_data.ownership_status == 'Complete') or not site_visit or site_visit.ownership_change != 'Yes') and 
+            ((site_visit and site_visit.load_enhancement == 'Yes' and kseb_data.load_enhancement_status == 'Complete') or not site_visit or site_visit.load_enhancement != 'Yes') and 
+            (kseb_data.fee_paid and kseb_data.feasibility_status == 'Complete')
+        ) else "Pending"
+        if old_work_done != kseb_data.work_done:
+            changes['work_done'] = {"old": old_work_done, "new": kseb_data.work_done}
+
+        if changes or action_type == "CREATE":
+            log = CustomerAuditLog(
+                customer_project_id=cust.id,
+                user_id=current_user_id,
+                action=action_type,
+                module_name=MODULE_NAME,
+                changes_payload=json.dumps(changes if changes else {"initialized": True})
+            )
+            db.session.add(log)
+
+        kseb_data.updated_by = current_user_id
+        kseb_data.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({"message": "KSEB record synchronized successfully", "kseb": kseb_data.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Save failed: {str(e)}"}), 500

@@ -426,7 +426,7 @@ const handleRequestAccessSubmit = async (permissionType) => {
   // Render Authentication Entry locking box structure if global matrix matrix schema criteria blocks visibility switches
   // NOTE (fix): admins bypass permission checks entirely on the backend, but
   // `access` here only reflects permissions["Service"], which can still be
-  // {view: false} on the very first render (before the permissions map has
+  // {view: true} on the very first render (before the permissions map has
   // loaded). That briefly flashed the "Access Restricted / Request Access"
   // screen for admins too. Admins should never see this gate, so short-circuit
   // it with isUserAdmin - the normal `loading` spinner below covers the wait.

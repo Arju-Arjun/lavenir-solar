@@ -26,6 +26,7 @@ from models import (
     SiteVisit, MNREProfile, MNREInstallation, Payment, BankLoan, KSEB,
     KsebRegistrationCompletion, DCRCertificate, MaterialDelivery,
     MaterialDeliveryItem, MaterialInstallation, Service, Complaint,
+    ComplaintAssignee,
 )
 from utils import serialize_model, generate_gemini_report
 
@@ -128,19 +129,34 @@ def search_staff():
 # ---------------------------------------------------------------------------
 
 def _build_customer_report_data(customer):
-    """Pulls together the 11 workflow modules for one customer."""
+    """Pulls together the 11 workflow modules for one customer, plus
+    complaints and audit-log history so the report reflects everything on
+    record for this customer, not just the 11 module tables."""
 
     latest_site_visit = (
         SiteVisit.query.filter_by(customer_project_id=customer.id)
         .order_by(SiteVisit.created_at.desc()).first()
     )
-    latest_kseb = (
+    # A customer can have more than one KSEB record over time (e.g. a
+    # feasibility re-check after a load enhancement) - report on the full
+    # history, not just the latest one, so nothing is silently dropped.
+    kseb_records = (
         KSEB.query.filter_by(customer_project_id=customer.id)
-        .order_by(KSEB.created_at.desc()).first()
+        .order_by(KSEB.created_at.desc()).all()
     )
     services = (
         Service.query.filter_by(customer_project_id=customer.id)
         .order_by(Service.service_number.asc()).all()
+    )
+    complaints = (
+        Complaint.query.filter_by(customer_project_id=customer.id)
+        .order_by(Complaint.created_at.desc()).all()
+    )
+    audit_logs = (
+        CustomerAuditLog.query.filter_by(customer_project_id=customer.id)
+        .order_by(CustomerAuditLog.timestamp.desc())
+        .limit(50)  # most recent 50 - full history can be very long
+        .all()
     )
 
     material_items = []
@@ -160,8 +176,8 @@ def _build_customer_report_data(customer):
         "payment_flow": serialize_model(customer.payment_rel),
         # 4. Bank Loan
         "bank_loan": serialize_model(customer.bank_loan_rel),
-        # 5. KSEB Feasibility
-        "kseb_feasibility": serialize_model(latest_kseb),
+        # 5. KSEB Feasibility (full history - a customer can have more than one)
+        "kseb_feasibility": [serialize_model(k) for k in kseb_records],
         # 6. Material Delivery
         "material_delivery": serialize_model(customer.material_delivery_rel),
         "material_delivery_items": [serialize_model(i) for i in material_items],
@@ -175,6 +191,12 @@ def _build_customer_report_data(customer):
         "mnre_installation": serialize_model(customer.mnre_installation_rel),
         # 11. Service & Maintenance
         "services": [serialize_model(s) for s in services],
+
+        # Extra context beyond the 11 modules - complaint history and a
+        # recent activity trail, so the report reflects everything on file
+        # for this customer.
+        "complaints": [c.to_dict() for c in complaints],
+        "recent_activity_log": [log.to_dict() for log in audit_logs],
     }
 
 
@@ -270,8 +292,9 @@ def _build_staff_report_data(staff_user, start_date, end_date):
 
     complaints_assigned = (
         Complaint.query
+        .join(ComplaintAssignee, ComplaintAssignee.complaint_id == Complaint.id)
         .filter(
-            Complaint.assigned_to == staff_user.id,
+            ComplaintAssignee.user_id == staff_user.id,
             Complaint.created_at >= start_date,
             Complaint.created_at <= end_date,
         )

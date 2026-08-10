@@ -2,13 +2,13 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import MaterialDelivery, MaterialDeliveryItem, db, User, CustomerProject, SiteVisit, CustomerAuditLog
 from datetime import datetime
-import cloudinary
-import cloudinary.uploader
+from sqlalchemy.exc import IntegrityError
 import json
 from utils import (
     check_permission, 
     permission_allows_for_user,
-    delete_cloudinary_file,
+    delete_r2_file,
+    upload_to_r2,
     handle_blueprint_check_access,
     handle_blueprint_request_access,
     get_module_folder_path,
@@ -45,7 +45,7 @@ def _serialize_delivery(material_delivery):
         "extra_material": material_delivery.extra_material,
         "structure_changes": material_delivery.structure_changes,
         "delivery_images": json.loads(material_delivery.delivery_images) if material_delivery.delivery_images else [],
-        "delivery_document": material_delivery.delivery_document,
+        "delivery_document": json.loads(material_delivery.delivery_document) if material_delivery.delivery_document else [],
         "delivered_by": material_delivery.delivered_by,
         "received_by": material_delivery.received_by,
         "comments": material_delivery.comments,
@@ -59,14 +59,36 @@ def _parse_bool(value):
         return False
     return str(value).strip().lower() in ['true', '1', 'yes', 'on']
 
-# Only these two are valid categories for an individual material item. ("Both"
-# is a frontend-only filter option meaning "no category filter", never a
-# value stored on a row.)
-ALLOWED_ITEM_CATEGORIES = {'Electrical', 'Structural'}
+def _file_ext(filename, default='bin'):
+    return filename.rsplit('.', 1)[-1] if '.' in filename else default
+
+# Valid categories for an individual material item. ("Both" is a
+# frontend-only filter option meaning "no category filter", never a value
+# stored on a row.) "Extra Items" is a special category for rows added from
+# the Usage/Installation tab that aren't part of the original delivered
+# inventory — the frontend renders these in a separate "Extra Items" table.
+ALLOWED_ITEM_CATEGORIES = {'Electrical', 'Structural', 'Extra Items'}
 
 def _normalize_category(raw_value, fallback='Electrical'):
-    value = (raw_value or '').strip().capitalize()
+    # .title() (not .capitalize()) so multi-word categories like
+    # "Extra Items" keep every word capitalized — .capitalize() would
+    # lowercase it to "Extra items", which wouldn't match the set above and
+    # would silently fall back to "Electrical".
+    value = (raw_value or '').strip().title()
     return value if value in ALLOWED_ITEM_CATEGORIES else fallback
+
+def _upload_documents(received_documents, folder_path, customer_id, start_index=1):
+    """Upload any number of files of any type (pdf, image, docx, xlsx, etc.)
+    for the delivery_document field. R2 stores whatever comes in without
+    branching on extension/mimetype - the original filename's extension is
+    kept on the object key."""
+    uploaded_urls = []
+    for i, doc in enumerate(received_documents):
+        if doc and doc.filename != '':
+            ext = _file_ext(doc.filename)
+            object_key = f"{folder_path}/doc{start_index + i}_{sanitize_path_segment(customer_id)}.{ext}"
+            uploaded_urls.append(upload_to_r2(doc, object_key, content_type=doc.mimetype))
+    return uploaded_urls
 
 @material_bp.route('/<string:customer_id>/', methods=['GET'])
 @jwt_required()
@@ -110,81 +132,15 @@ def create_material_delivery(customer_id):
     if not customer_project:
         return jsonify({"error": "Customer project records missing."}), 404
 
-    if customer_project.material_delivery_rel:
-        # A delivery record may already exist here even if the user never
-        # touched the main delivery form — e.g. it gets auto-created when
-        # material items are saved first via MaterialItem.jsx. Rather than
-        # forcing the frontend to know which verb to call, treat this as an
-        # update instead of failing.
-        return update_material_delivery(customer_id)
-
-    # Centralized storage folder for this customer + module, e.g.:
-    # lavenir/JohnDoe_1023/materialdelivery
-    folder_path = get_module_folder_path(customer_project.customer_name, customer_project.customer_id, FOLDER_MODULE_NAME)
-
-    form = request.form
-    files = request.files
-
-    delivery_date_str = form.get('delivery_date')
-    try:
-        delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d').date() if delivery_date_str else datetime.utcnow().date()
-    except ValueError:
-        return jsonify({"error": "Invalid date string format parameters."}), 400
-
-    delivery_document_url = None
-    doc_file = files.get('delivery_document')
-    if doc_file and doc_file.filename != '':
-        # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
-        # extension automatically), giving lavenir/{customer}_{id}/materialdelivery/{doctype}_{id}.{ext}
-        public_id = f"{sanitize_path_segment('delivery_document')}_{sanitize_path_segment(customer_project.customer_id)}"
-        upload_res = cloudinary.uploader.upload(
-            doc_file, folder=folder_path, public_id=public_id, overwrite=True, resource_type="auto"
-        )
-        delivery_document_url = upload_res['secure_url']
-
-    image_urls = []
-    received_images = files.getlist('delivery_images') or files.getlist('images')
-    for i, photo in enumerate(received_images):
-        if photo and photo.filename != '':
-            public_id = f"photo{i + 1}_{sanitize_path_segment(customer_project.customer_id)}"
-            upload_res = cloudinary.uploader.upload(
-                photo, folder=folder_path, public_id=public_id, overwrite=True
-            )
-            image_urls.append(upload_res['secure_url'])
-
-    new_delivery = MaterialDelivery(
-        customer_project_id=customer_project.id,
-        delivery_date=delivery_date,
-        electrical_delivered=_parse_bool(form.get('electrical_delivered')),
-        structure_delivered=_parse_bool(form.get('structure_delivered')),
-        panel_delivered=_parse_bool(form.get('panel_delivered')),
-        changes=form.get('changes'),
-        extra_material=form.get('extra_material'),
-        structure_changes=form.get('structure_changes'),
-        delivery_images=json.dumps(image_urls),
-        delivery_document=delivery_document_url,
-        delivered_by=form.get('delivered_by'),
-        received_by=form.get('received_by'),
-        comments=form.get('comments'),
-        created_by=user.id,
-        updated_by=user.id
-    )
-
-    new_delivery.work_done = "Completed" if (new_delivery.electrical_delivered and new_delivery.structure_delivered and new_delivery.panel_delivered and len(image_urls) > 0) else "Pending"
-    
-    db.session.add(new_delivery)
-
-    audit_log = CustomerAuditLog(
-        customer_project_id=customer_project.id,
-        user_id=uid,
-        action="CREATE",
-        module_name=MODULE_NAME,
-        changes_payload=json.dumps({"initialized": True})
-    )
-    db.session.add(audit_log)
-    db.session.commit()
-
-    return jsonify({"message": "Delivery mapping initialized successfully.", "delivery": _serialize_delivery(new_delivery)}), 201
+    # Always delegate to update_material_delivery, whether or not a row
+    # exists yet. It already has its own "auto-create a stub row if missing"
+    # branch (below) that stays race-safe under the unique constraint, and
+    # it's the ONLY code path that persists the `items` table on save. This
+    # used to duplicate that create logic here WITHOUT the items-handling
+    # block, so a legacy customer's very first delivery save (with items
+    # already filled in on the form) silently dropped the items - nothing
+    # in that branch ever touched them.
+    return update_material_delivery(customer_id)
 
 @material_bp.route('/<string:customer_id>/', methods=['PUT'])
 @jwt_required()
@@ -220,16 +176,34 @@ def update_material_delivery(customer_id):
         # still be filled in later via the main Material Delivery form.
         material_delivery = MaterialDelivery(
             customer_project_id=customer_project.id,
-            delivery_date=datetime.utcnow().date(),
+            # No delivery_date here — this is a bare stub created because
+            # items were entered before the user touched the actual
+            # "Delivery Date" field. Defaulting it to today's date made the
+            # field show a date the user never picked, the very next time
+            # they opened this tab to edit anything else. Leave it null
+            # until the user explicitly sets it below.
             electrical_delivered=False,
             structure_delivered=False,
             panel_delivered=False,
             delivery_images=json.dumps([]),
+            delivery_document=json.dumps([]),
             created_by=user.id,
             updated_by=user.id
         )
         db.session.add(material_delivery)
-        db.session.flush()  # assigns material_delivery.id for use below, no commit yet
+        try:
+            # Flush (not commit) so the unique constraint on
+            # customer_project_id is checked now. If a concurrent request
+            # already inserted a row for this customer between our lookup
+            # above and this INSERT (e.g. two rapid saves from
+            # MaterialItem.jsx and the main form), this raises
+            # IntegrityError instead of racing to create a second row.
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            material_delivery = MaterialDelivery.query.filter_by(customer_project_id=customer_project.id).first()
+            if not material_delivery:
+                return jsonify({"error": "Could not save delivery record due to a conflicting update. Please try again."}), 409
         created_new_delivery = True
         changes['delivery_record'] = {"old": None, "new": "auto-created"}
 
@@ -258,39 +232,45 @@ def update_material_delivery(customer_id):
             track(field, getattr(material_delivery, field), new_val)
             setattr(material_delivery, field, new_val)
 
-    doc_file = files.get('delivery_document')
-    if doc_file and doc_file.filename != '':
-        old_doc = material_delivery.delivery_document
-        delete_cloudinary_file(old_doc, folder_path)
-        public_id = f"{sanitize_path_segment('delivery_document')}_{sanitize_path_segment(customer_project.customer_id)}"
-        upload_res = cloudinary.uploader.upload(
-            doc_file, folder=folder_path, public_id=public_id, overwrite=True, resource_type="auto"
-        )
-        track('delivery_document', old_doc, upload_res['secure_url'])
-        material_delivery.delivery_document = upload_res['secure_url']
-
+    # --- Images: add new uploads, drop any explicitly removed ---
     existing_images = json.loads(material_delivery.delivery_images) if material_delivery.delivery_images else []
     new_uploaded_urls = []
     received_images = files.getlist('delivery_images') or files.getlist('images')
     # Continue numbering from where the existing image list left off so each
-    # image gets a unique public_id within the same module folder.
+    # image gets a unique object key within the same module folder.
     start_index = len(existing_images) + 1
     for i, photo in enumerate(received_images):
         if photo and photo.filename != '':
-            public_id = f"photo{start_index + i}_{sanitize_path_segment(customer_project.customer_id)}"
-            upload_res = cloudinary.uploader.upload(
-                photo, folder=folder_path, public_id=public_id, overwrite=True
-            )
-            new_uploaded_urls.append(upload_res['secure_url'])
+            ext = _file_ext(photo.filename, default='jpg')
+            object_key = f"{folder_path}/photo{start_index + i}_{sanitize_path_segment(customer_project.customer_id)}.{ext}"
+            new_uploaded_urls.append(upload_to_r2(photo, object_key, content_type=photo.mimetype))
 
     removed_images = json.loads(form.get('removed_images', '[]')) if 'removed_images' in form else []
     final_images = [img for img in existing_images if img not in removed_images] + new_uploaded_urls
 
     for removed_url in removed_images:
-        delete_cloudinary_file(removed_url, folder_path)
+        delete_r2_file(removed_url)
 
     if new_uploaded_urls or removed_images:
         changes['delivery_images'] = {"added": new_uploaded_urls, "removed": removed_images}
+
+    # --- Documents: same add/remove pattern as images, multiple files and
+    # multiple file types (pdf, docx, xlsx, images, ...) all accepted ---
+    existing_documents = json.loads(material_delivery.delivery_document) if material_delivery.delivery_document else []
+    received_documents = files.getlist('delivery_document') or files.getlist('documents')
+    start_doc_index = len(existing_documents) + 1
+    new_document_urls = _upload_documents(
+        received_documents, folder_path, customer_project.customer_id, start_index=start_doc_index
+    )
+
+    removed_documents = json.loads(form.get('removed_documents', '[]')) if 'removed_documents' in form else []
+    final_documents = [doc for doc in existing_documents if doc not in removed_documents] + new_document_urls
+
+    for removed_doc in removed_documents:
+        delete_r2_file(removed_doc)
+
+    if new_document_urls or removed_documents:
+        changes['delivery_document'] = {"added": new_document_urls, "removed": removed_documents}
 
     # --- Persist the material items table (previously ignored entirely) ---
     items_json = form.get('items')
@@ -357,6 +337,7 @@ def update_material_delivery(customer_id):
         changes['items'] = {"count": len(items_data)}
 
     material_delivery.delivery_images = json.dumps(final_images)
+    material_delivery.delivery_document = json.dumps(final_documents)
     material_delivery.updated_by = user.id
     material_delivery.updated_at = datetime.utcnow()
     

@@ -41,15 +41,16 @@ const formatDateTime = (iso) => {
 
 const emptyCreateForm = {
   subject: '', description: '', category: 'Other', categoryOther: '', priority: 'Medium',
-  district_snapshot: '', place_snapshot: '', assigned_to: '', files: [],
+  district_snapshot: '', place_snapshot: '', assigned_to: [], files: [],
 };
 
-// --- Staff Picker Component ---
-const StaffPicker = ({ staffOptions, value, onChange, placeholder = 'Click to pick a staff member…' }) => {
+// --- Multi Staff Picker Component (supports assigning several staff) ---
+const MultiStaffPicker = ({ staffOptions, value, onChange, placeholder = 'Click to add staff…' }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const wrapRef = useRef(null);
-  const selected = staffOptions.find((s) => String(s.id) === String(value));
+  const selectedIds = (value || []).map(String);
+  const selectedStaff = staffOptions.filter((s) => selectedIds.includes(String(s.id)));
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -63,22 +64,46 @@ const StaffPicker = ({ staffOptions, value, onChange, placeholder = 'Click to pi
 
   const filtered = staffOptions.filter((s) => (s.full_name || '').toLowerCase().includes(query.toLowerCase()));
 
+  const toggleStaff = (id) => {
+    const idStr = String(id);
+    if (selectedIds.includes(idStr)) {
+      onChange((value || []).filter((v) => String(v) !== idStr));
+    } else {
+      onChange([...(value || []), id]);
+    }
+  };
+
+  const removeStaff = (id) => onChange((value || []).filter((v) => String(v) !== String(id)));
+
   return (
     <div ref={wrapRef} className="staff-picker-wrap">
+      {selectedStaff.length > 0 && (
+        <div className="multi-staff-chip-row">
+          {selectedStaff.map((s) => (
+            <span key={s.id} className="multi-staff-chip">
+              {s.full_name}
+              <button type="button" className="multi-staff-chip-remove" onClick={() => removeStaff(s.id)}>✕</button>
+            </span>
+          ))}
+        </div>
+      )}
       <input
         type="text"
-        value={open ? query : (selected ? selected.full_name : '')}
+        value={query}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => { setOpen(true); setQuery(''); }}
+        onFocus={() => { setOpen(true); }}
         placeholder={placeholder} autoComplete="off"
       />
-      {!!value && !open && (
-        <button type="button" className="staff-picker-clear-btn" onClick={() => onChange('')}>✕</button>
-      )}
       {open && (
         <div className="staff-picker-dropdown">
           {filtered.length === 0 ? <div className="staff-picker-empty">No staff found.</div> : filtered.map((s) => (
-            <div key={s.id} className="staff-picker-option" onMouseDown={(e) => e.preventDefault()} onClick={() => { onChange(String(s.id)); setOpen(false); setQuery(''); }}>
+            <div
+              key={s.id}
+              className={`staff-picker-option${selectedIds.includes(String(s.id)) ? ' selected' : ''}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => toggleStaff(s.id)}
+            >
+              <input type="checkbox" readOnly checked={selectedIds.includes(String(s.id))} />
               {s.full_name}
             </div>
           ))}
@@ -182,8 +207,26 @@ const CommentThread = ({ comments, onAdd, isUserAdmin, posting }) => {
 };
 
 const ComplaintsPage = () => {
-  const { isAdmin, role } = useAuth();
+  const { isAdmin, role, user, permissions } = useAuth();
   const isUserAdmin = isAdmin || role === 'admin';
+  const currentUserId = user?.id;
+
+  // Mirrors _can_edit_complaint() on the backend (complaints.py) - this is
+  // purely a UI convenience (show/hide the Edit button); the backend PATCH
+  // /edit route re-checks and is the real enforcement point.
+  //   - admin: always
+  //   - assigned complaint: only its assignee(s)
+  //   - unassigned complaint: anyone holding 'update' on Complaints or Service
+  const hasUnassignedEditPermission = isUserAdmin
+    || !!(permissions?.Complaints?.update)
+    || !!(permissions?.Service?.update);
+
+  const canEditComplaint = (c) => {
+    if (isUserAdmin) return true;
+    const assigneeIds = (c.assignee_ids || []).map(String);
+    if (assigneeIds.length > 0) return assigneeIds.includes(String(currentUserId));
+    return hasUnassignedEditPermission;
+  };
 
   const [complaints, setComplaints] = useState([]);
   const [staffOptions, setStaffOptions] = useState([]);
@@ -212,7 +255,7 @@ const ComplaintsPage = () => {
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [editForm, setEditForm] = useState({
     subject: '', description: '', category: '', categoryOther: '', priority: '',
-    district_snapshot: '', place_snapshot: '', status: '', resolution_notes: '', assigned_to: '',
+    district_snapshot: '', place_snapshot: '', status: '', resolution_notes: '', assigned_to: [],
   });
 
   const [newAttachmentFiles, setNewAttachmentFiles] = useState([]);
@@ -316,7 +359,7 @@ const ComplaintsPage = () => {
       formData.append('district_snapshot', createForm.district_snapshot);
       formData.append('place_snapshot', createForm.place_snapshot);
 
-      if (isUserAdmin && createForm.assigned_to) formData.append('assigned_to', createForm.assigned_to);
+      if (isUserAdmin) createForm.assigned_to.forEach((id) => formData.append('assigned_to', id));
       createForm.files.forEach((f) => formData.append('files', f));
 
       const res = await fetch(`${API_BASE}/api/complaints/create`, {
@@ -339,7 +382,7 @@ const ComplaintsPage = () => {
     setEditForm({
       subject: complaint.subject, description: complaint.description, category, categoryOther, priority: complaint.priority,
       district_snapshot: complaint.district_snapshot || '', place_snapshot: complaint.place_snapshot || '',
-      status: complaint.status, resolution_notes: complaint.resolution_notes || '', assigned_to: complaint.assigned_to || '',
+      status: complaint.status, resolution_notes: complaint.resolution_notes || '', assigned_to: complaint.assignee_ids || [],
     });
     setNewAttachmentFiles([]); setFormError('');
   };
@@ -360,7 +403,7 @@ const ComplaintsPage = () => {
       formData.append('status', editForm.status);
       formData.append('resolution_notes', editForm.resolution_notes);
 
-      if (isUserAdmin && editForm.assigned_to) formData.append('assigned_to', editForm.assigned_to);
+      if (isUserAdmin) editForm.assigned_to.forEach((id) => formData.append('assigned_to', id));
 
       const res = await fetch(`${API_BASE}/api/complaints/${editComplaint.id}/edit`, {
         method: 'PATCH',
@@ -368,6 +411,10 @@ const ComplaintsPage = () => {
         body: formData,
       });
       const data = await res.json();
+      // 403 here means the backend's permission check rejected the edit
+      // (not admin, not an assignee, and no Service/update permission on an
+      // unassigned complaint) - surface that clearly instead of a generic error.
+      if (res.status === 403) throw new Error(data.error || "You don't have permission to update this complaint.");
       if (!res.ok) throw new Error(data.error || 'Failed to update complaint.');
 
       setEditComplaint(null); fetchComplaints();
@@ -443,6 +490,11 @@ const ComplaintsPage = () => {
       <style>{`
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .global-loader-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255, 255, 255, 0.7); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 1.2rem; }
+        .multi-staff-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+        .multi-staff-chip { display: inline-flex; align-items: center; gap: 6px; background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 3px 8px; font-size: 0.85rem; }
+        .multi-staff-chip-remove { border: none; background: transparent; cursor: pointer; color: inherit; font-size: 0.75rem; line-height: 1; }
+        .staff-picker-option.selected { background: #eef2ff; }
+        .staff-picker-option { display: flex; align-items: center; gap: 8px; }
       `}</style>
 
       {saving && !showCreateModal && !editComplaint && (
@@ -495,8 +547,12 @@ const ComplaintsPage = () => {
                       <td><span className={`perm-status-badge ${STATUS_CLASS[c.status] || ''}`}>{c.status}</span></td>
                       <td><SlaBadge complaint={c} /></td>
                       <td onClick={(e) => e.stopPropagation()}>
-                        <button className="action-view-button" onClick={() => openEdit(c)} style={{ marginRight: '8px' }}><FaEdit /></button>
-                        <button className="btn-action-delete" onClick={() => triggerDeleteConfirmation(c)} style={{ color: 'var(--error)', background: 'transparent', border: 'none', cursor: 'pointer' }}><FaTrashAlt /></button>
+                        {canEditComplaint(c) && (
+                          <button className="action-view-button" onClick={() => openEdit(c)} style={{ marginRight: '8px' }}><FaEdit /></button>
+                        )}
+                        {isUserAdmin && (
+                          <button className="btn-action-delete" onClick={() => triggerDeleteConfirmation(c)} style={{ color: 'var(--error)', background: 'transparent', border: 'none', cursor: 'pointer' }}><FaTrashAlt /></button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -615,11 +671,11 @@ const ComplaintsPage = () => {
 
               {isUserAdmin && (
                 <div className="form-group">
-                  <label>Assign To (Admin Only)</label>
-                  <StaffPicker
+                  <label>Assign To (Admin Only, multiple allowed)</label>
+                  <MultiStaffPicker
                     staffOptions={staffOptions}
                     value={createForm.assigned_to}
-                    onChange={(id) => setCreateForm({ ...createForm, assigned_to: id })}
+                    onChange={(ids) => setCreateForm({ ...createForm, assigned_to: ids })}
                     placeholder="Search staff to assign..."
                   />
                 </div>
@@ -668,11 +724,11 @@ const ComplaintsPage = () => {
 
               {isUserAdmin && (
                 <div className="form-group" style={{ flex: 1 }}>
-                  <label>Assign To (Admin Only)</label>
-                  <StaffPicker
+                  <label>Assign To (Admin Only, multiple allowed)</label>
+                  <MultiStaffPicker
                     staffOptions={staffOptions}
                     value={editForm.assigned_to}
-                    onChange={(id) => setEditForm({ ...editForm, assigned_to: id })}
+                    onChange={(ids) => setEditForm({ ...editForm, assigned_to: ids })}
                   />
                 </div>
               )}
@@ -755,7 +811,9 @@ const ComplaintsPage = () => {
               <div className="form-group" style={{ flex: 1 }}>
                 <label>Assigned Staff</label>
                 <p className="complaint-assignee-name">
-                  {viewComplaint.assigned_staff_name || 'Unassigned'}
+                  {viewComplaint.assignees && viewComplaint.assignees.length > 0
+                    ? viewComplaint.assignees.map((a) => a.full_name).join(', ')
+                    : 'Unassigned'}
                 </p>
               </div>
             </div>

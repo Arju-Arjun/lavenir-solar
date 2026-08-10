@@ -172,9 +172,8 @@ def get_customer_documents(customer_id):
     deliveries = MaterialDelivery.query.filter_by(customer_project_id=customer_id).order_by(MaterialDelivery.created_at.asc()).all()
     for i, md in enumerate(deliveries, start=1):
         suffix = f" #{i}" if len(deliveries) > 1 else ""
-        entry = _file_entry(md.delivery_document, f"Delivery Document{suffix}")
-        if entry:
-            material_delivery_files.append(entry)
+        entry_list = _gallery_entries(md.delivery_document, f"Delivery Document{suffix}")
+        material_delivery_files.extend(entry_list)
         material_delivery_files.extend(_gallery_entries(md.delivery_images, f"Delivery Photo{suffix}"))
     if material_delivery_files:
         result["material_delivery"] = material_delivery_files

@@ -35,7 +35,9 @@ const Kseb = ({ customerId }) => {
     load_enhancement_comment: "",
     feasibility_status: "Pending",
     comments: "",
-    fee_paid: false
+    fee_paid: false,
+    payment_date: "",
+    visiter_name: ""
   });
 
   const [modalConfig, setModalConfig] = useState({
@@ -114,7 +116,9 @@ const Kseb = ({ customerId }) => {
             load_enhancement_comment: data.kseb.load_enhancement_comment || "",
             feasibility_status: data.kseb.feasibility_status || "Pending",
             comments: data.kseb.comments || "",
-            fee_paid: !!data.kseb.fee_paid
+            fee_paid: !!data.kseb.fee_paid,
+            payment_date: data.kseb.payment_date || "",
+            visiter_name: data.kseb.visiter_name || ""
           });
         } else {
           resetFormState();
@@ -136,7 +140,9 @@ const Kseb = ({ customerId }) => {
       load_enhancement_comment: "",
       feasibility_status: "Pending",
       comments: "",
-      fee_paid: false
+      fee_paid: false,
+      payment_date: "",
+      visiter_name: ""
     });
   };
 
@@ -234,7 +240,9 @@ const Kseb = ({ customerId }) => {
         load_enhancement_comment: ksebRecord.load_enhancement_comment || "",
         feasibility_status: ksebRecord.feasibility_status || "Pending",
         comments: ksebRecord.comments || "",
-        fee_paid: !!ksebRecord.fee_paid
+        fee_paid: !!ksebRecord.fee_paid,
+        payment_date: ksebRecord.payment_date || "",
+        visiter_name: ksebRecord.visiter_name || ""
       });
     }
   };
@@ -288,16 +296,38 @@ const Kseb = ({ customerId }) => {
             {siteVisitFlags.ownership_change && (
               <div className="detail-item-node">
                 <span className="node-label">Ownership Change Status:</span>
-                <span className="node-value">{ksebRecord?.ownership_status || "Pending"}</span>
+                <span className="node-value" style={{ color: ksebRecord?.ownership_status === 'Complete' ? '#10b981' : '#9ca3af', fontWeight: ksebRecord?.ownership_status === 'Complete' ? 600 : 400 }}>
+                  {ksebRecord?.ownership_status || "Pending"}
+                </span>
               </div>
             )}
+
 
             {siteVisitFlags.load_enhancement && (
               <div className="detail-item-node">
                 <span className="node-label">Load Enhancement Status:</span>
-                <span className="node-value">{ksebRecord?.load_enhancement_status || "Pending"}</span>
+                <span className="node-value" style={{ color: ksebRecord?.load_enhancement_status === 'Complete' ? '#10b981' : '#9ca3af', fontWeight: ksebRecord?.load_enhancement_status === 'Complete' ? 600 : 400 }}>
+                  {ksebRecord?.load_enhancement_status || "Pending"}
+                </span>
               </div>
             )}
+
+            <div className="detail-item-node">
+              <span className="node-label">Payment Date:</span>
+               {ksebRecord?.payment_date ? (
+                <span className="node-value">{new Date(ksebRecord.payment_date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
+              ) : (
+                <span style={{ fontSize: "0.65rem", color: "#64748b" }}>dd-mm-yyyy</span>
+              )}
+            </div>
+            <div className="detail-item-node">
+              <span className="node-label">Visitor Name:</span>
+               {ksebRecord?.visiter_name ? (
+                <span className="node-value">{ksebRecord.visiter_name}</span>
+              ) : (
+                <span style={{ fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+              )}
+            </div>
 
             <div className="detail-item-node">
               <span className="node-label">Feasibility Status:</span>
@@ -311,7 +341,7 @@ const Kseb = ({ customerId }) => {
 
             <div className="detail-item-node">
               <span className="node-label">Fee Paid:</span>
-              <span className="node-value" style={{ color: ksebRecord?.fee_paid ? '#10b981' : '#ef4444' }}>
+              <span className={`status-badge-token-mnre ${ksebRecord?.fee_paid ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {ksebRecord?.fee_paid ? "Yes" : "No"}
               </span>
             </div>
@@ -368,7 +398,62 @@ const Kseb = ({ customerId }) => {
                 </select>
               </div>
             )}
+          </div>
 
+          <div className="form-grid-layout">
+            {/* Registration Submitted & Date */}
+            <div className="checkbox-date-row-group">
+              <div className="form-group-element">
+                <label className="kseb-checkbox-custom-label">
+                  <input 
+                    type="checkbox" 
+                    name="fee_paid" 
+                    checked={formData.fee_paid} 
+                    onChange={handleInputChange} 
+                    disabled={!canUpdate} 
+                    className="kseb-custom-checkbox" 
+                  />
+                  <span className="kseb-label-text">Fee Paid</span>
+                </label>
+              </div>
+              </div>
+              </div>
+              <div className="form-grid-layout">
+              <div className="form-group-element">
+              <label>Payment Date *</label>
+              <input
+                type="date"
+                name="payment_date"
+                value={formData.payment_date}
+                onChange={(e) => {
+                      if (formData.fee_paid) {
+                      handleInputChange(e);
+                    }
+                  }}
+                disabled={!canUpdate || !formData.fee_paid}
+                className="control-input-field"
+                required={formData.fee_paid}
+                style={!formData.fee_paid ? { color: "#9ca3af", backgroundColor: "#f3f4f6", cursor: "not-allowed" }  : undefined }
+              />
+            {!formData.fee_paid && (
+                <span style={{ fontSize: "0.75rem", color: "#9ca3af", marginTop: "4px", display: "block" }}>
+                  Mark fee as paid to enable Complete
+                </span>
+              )}
+              </div>
+      
+            </div>
+            <div className="form-group-element">
+              <label>Visitor Name</label>
+              <input
+                type="text"
+                name="visiter_name"
+                value={formData.visiter_name}
+                onChange={handleInputChange}
+                disabled={!canUpdate}
+                className="control-input-field"
+              />
+            </div>
             <div className="form-group-element">
               <label>Feasibility Status *</label>
               <select
@@ -387,8 +472,9 @@ const Kseb = ({ customerId }) => {
                   Mark fee as paid to enable Complete
                 </span>
               )}
-            </div>
-          </div>
+              </div>
+            
+          
 
           {siteVisitFlags.ownership_change && (
             <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
@@ -403,13 +489,6 @@ const Kseb = ({ customerId }) => {
               <textarea name="load_enhancement_comment" value={formData.load_enhancement_comment} onChange={handleInputChange} disabled={!canUpdate} rows="2" />
             </div>
           )}
-
-          <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
-            <label className="checkbox-interactive-label">
-              <input type="checkbox" name="fee_paid" checked={formData.fee_paid} onChange={handleInputChange} className="checkbox-input-element" disabled={!canUpdate} />
-              <span className="checkbox-label-text">Fee Paid</span>
-            </label>
-          </div>
 
           <div className="form-group-element textarea-full-span" style={{ marginTop: "16px" }}>
             <label>Comments</label>

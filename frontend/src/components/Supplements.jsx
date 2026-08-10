@@ -1,100 +1,246 @@
 import React, { useState, useEffect } from 'react';
-import { FaFileAlt, FaDownload, FaFolderOpen } from 'react-icons/fa';
+import { FaFileAlt, FaFileImage, FaDownload, FaEdit, FaTrash, FaPlus, FaSave, FaTimes } from 'react-icons/fa';
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`;
 
-const USE_STATIC_FILES = true;
+function getExt(fileObj) {
+  const source = fileObj?.name || fileObj?.url || '';
+  const match = source.split('?')[0].split('.').pop();
+  return match ? match.toUpperCase() : 'FILE';
+}
 
-const STATIC_SUPPLEMENT_FILES = [
-  { name: 'Annexure 1', url: '/public/assets/Annexure-1.pdf' },
-  { name: 'Annexure 2', url: '/public/assets/Annexure-2.pdf' },
-  { name: 'Annexure 3', url: '/public/assets/Annexure-3.pdf' }
-];
+function isImageFile(fileObj) {
+  return /\.(png|jpe?g|gif|webp)$/i.test(fileObj?.url || fileObj?.name || '');
+}
 
 function Supplements() {
-  const [files, setFiles] = useState(USE_STATIC_FILES ? STATIC_SUPPLEMENT_FILES : []);
-  const [loading, setLoading] = useState(!USE_STATIC_FILES);
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState([]);
+  const [newFile, setNewFile] = useState(null);
+  const [newTitle, setNewTitle] = useState('');
+  const [newDescription, setNewDescription] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const fetchSupplements = async () => {
+    setLoading(true);
+    const token = localStorage.getItem('token');
+    try {
+      const res = await fetch(`${API_BASE}/supplements/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const fileList = Array.isArray(data) ? data : data.files || [];
+        setFiles(fileList);
+        setEditData(fileList);
+      } else {
+        setError('Failed to load supplement documents.');
+      }
+    } catch (err) {
+      console.error('Failed to fetch supplement documents:', err);
+      setError('Failed to load supplement documents.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (USE_STATIC_FILES) return;
-
-    const fetchSupplements = async () => {
-      const token = localStorage.getItem('token');
-      try {
-        const res = await fetch(`${API_BASE}/supplements`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setFiles(Array.isArray(data) ? data : data.files || []);
-        } else {
-          setError('Failed to load supplement documents.');
-        }
-      } catch (err) {
-        console.error('Failed to fetch supplement documents:', err);
-        setError('Failed to load supplement documents.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchSupplements();
   }, []);
 
+  const handleFieldChange = (index, field, value) => {
+    const updated = [...editData];
+    updated[index][field] = value;
+    setEditData(updated);
+  };
+
+  const handleDeleteExisting = (index) => {
+    const updated = [...editData];
+    updated.splice(index, 1);
+    setEditData(updated);
+  };
+
+  const handleSaveChanges = async () => {
+    setSaving(true);
+    const token = localStorage.getItem('token');
+    const formData = new FormData();
+    formData.append('documents', JSON.stringify(editData));
+
+    if (newFile) {
+      formData.append('new_file', newFile);
+      formData.append('title', newTitle);
+      formData.append('description', newDescription);
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/supplements/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData
+      });
+
+      if (res.ok) {
+        setIsEditing(false);
+        setNewFile(null);
+        setNewTitle('');
+        setNewDescription('');
+        fetchSupplements();
+      } else {
+        alert('Failed to save changes.');
+      }
+    } catch (err) {
+      console.error('Error saving supplement documents:', err);
+      alert('Error saving changes.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <div className="supplement-main-container">
-      <div className="supplement-header-block">
-        <h2>Supplement Documents</h2>
-        <p className="supplement-subtitle-text">Reference files and certificates available for download.</p>
+    <div className="dc-page">
+      {/* <div className="dc-header-row"> */}
+      <div>
+        <div>
+          {/* <h2>Supplement Documents</h2> */}
+          <div className="profile-header-summary-card"><h2>📋 Supplement Documents</h2></div>
+          
+        </div>
+        <div className="supplements-buttons">
+          {!isEditing ? (
+            <div className="supplement-action">
+              <button onClick={() => setIsEditing(true)}>
+                <FaEdit className="icon-mr-6" /> Edit
+              </button>
+            </div>
+          ) : (
+            <div className="supplement-action">
+              <button onClick={handleSaveChanges} disabled={saving}>
+                {saving ? 'Saving...' : <><FaSave className="icon-mr-6" /> save</>}
+              </button>
+              <button onClick={() => { setIsEditing(false); setEditData(files); }}>
+                <FaTimes className="icon-mr-6" /> Cancel
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="supplement-content-card">
+      <div className="dc-panel">
         {loading ? (
-          <div className="supplement-loader-wrap">
-            <div className="supplement-spinner-circle"></div>
+          <div className="dc-loading">
+            <div className="dc-spinner"></div>
             <p>Loading supplement documents...</p>
           </div>
         ) : error ? (
-          <div className="supplement-error-notice">{error}</div>
-        ) : files.length === 0 ? (
-          <div className="supplement-empty-box">
-            <FaFolderOpen size={48} className="supplement-empty-icon" />
-            <div className="supplement-empty-msg">No supplement documents available yet.</div>
+          <div className="dc-error">{error}</div>
+        ) : (!isEditing && files.length === 0) ? (
+          <div className="dc-empty">
+            <FaFileAlt size={32} />
+            <p>No supplement documents available yet.</p>
           </div>
         ) : (
-          <div className="supplement-grid-deck">
-            {files.map((fileObj, idx) => {
-              const fileUrl = typeof fileObj === 'string' ? fileObj : fileObj?.url;
-              const fileName = typeof fileObj === 'string' ? `Document ${idx + 1}` : (fileObj?.name || `Document ${idx + 1}`);
+          <div className="dc-grid">
+            {(!isEditing ? files : editData).map((fileObj, idx) => {
+              const fileUrl = fileObj?.url;
+              const fileName = fileObj?.name || `Document ${idx + 1}`;
+              const fileDesc = fileObj?.description || '';
+              const isImage = isImageFile(fileObj);
               if (!fileUrl) return null;
-              const isPdf = fileUrl.toLowerCase().includes('.pdf');
 
               return (
-                <div key={idx} className="supplement-card-tile">
-                  <a href={fileUrl} target="_blank" rel="noreferrer" className="supplement-tile-link" title={fileName}>
-                    {isPdf ? (
-                      <div className="supplement-pdf-preview">
-                        <FaFileAlt className="supplement-pdf-icon" size={28} />
-                        <span className="supplement-pdf-name">{fileName}</span>
+                <div key={idx} className="dc-card">
+                  <div className="dc-cover-wrap">
+                    <a href={fileUrl} target="_blank" rel="noreferrer" className="dc-cover-link" title={fileName}>
+                      <div className="dc-cover">
+                        <div className="dc-cover-fold"></div>
+                        {isImage ? (
+                          <img src={fileUrl} alt={fileName} className="dc-cover-img" />
+                        ) : (
+                          <>
+                            <FaFileAlt className="dc-cover-icon" size={36} />
+                            <span className="dc-cover-badge">{getExt(fileObj)}</span>
+                          </>
+                        )}
                       </div>
-                    ) : (
-                      <img src={fileUrl} alt={fileName} className="supplement-img-preview" />
+                    </a>
+                    {!isEditing && (
+                      <a href={fileUrl} download target="_blank" rel="noreferrer" className="dc-download-fab" title="Download File">
+                        <FaDownload size={11} />
+                      </a>
                     )}
-                  </a>
-                  <a
-                    href={fileUrl}
-                    download
-                    target="_blank"
-                    rel="noreferrer"
-                    className="supplement-download-action-btn"
-                    title="Download File"
-                  >
-                    <FaDownload size={10} />
-                  </a>
+                  </div>
+
+                  {isEditing ? (
+                    <div className="dc-edit-fields">
+                      <input
+                        type="text"
+                        value={fileObj.name || ''}
+                        onChange={(e) => handleFieldChange(idx, 'name', e.target.value)}
+                        placeholder="Document title"
+                        className="form-input"
+                      />
+                      <textarea
+                        value={fileObj.description || ''}
+                        onChange={(e) => handleFieldChange(idx, 'description', e.target.value)}
+                        placeholder="Enter description..."
+                        className="form-input"
+                      />
+                      <button
+                        className="btn-action-delete dc-delete-btn"
+                        onClick={() => handleDeleteExisting(idx)}
+                      >
+                        <FaTrash className="icon-mr-6" /> Delete
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="dc-info">
+                      <h4 className="dc-title">{fileName}</h4>
+                      <p className="dc-desc">{fileDesc || 'No description provided.'}</p>
+                    </div>
+                  )}
                 </div>
               );
             })}
+
+            {/* New File Upload Template Card (+ Button) */}
+            {isEditing && (
+              <div className="dc-upload-tile">
+                <label htmlFor="new-pdf-upload" className="dc-upload-label">
+                  <div className="dc-upload-circle">
+                    <FaPlus size={16} />
+                  </div>
+                  <span className="dc-upload-text">Upload New PDF</span>
+                </label>
+                <input
+                  id="new-pdf-upload"
+                  type="file"
+                  accept=".pdf"
+                  className="dc-upload-input"
+                  onChange={(e) => setNewFile(e.target.files[0])}
+                />
+                {newFile && (
+                  <div className="dc-upload-preview">
+                    <span className="dc-upload-filename">Selected: {newFile.name}</span>
+                    <input
+                      type="text"
+                      placeholder="Title for new PDF"
+                      value={newTitle}
+                      onChange={(e) => setNewTitle(e.target.value)}
+                      className="form-input"
+                    />
+                    <textarea
+                      placeholder="Description for new PDF"
+                      value={newDescription}
+                      onChange={(e) => setNewDescription(e.target.value)}
+                      className="form-input"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

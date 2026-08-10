@@ -8,7 +8,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
   const getGoogleMapsUrl = (location) => {
     if (!location) return "#";
     const targetLocation = location.includes(" | ") ? location.split(" | ")[0] : location;
-    return `http://googleusercontent.com/maps.google.com/?q=${encodeURIComponent(targetLocation)}`;
+    // return `http://googleusercontent.com/maps.google.com/?q=${encodeURIComponent(targetLocation)}`;
+    return `https://maps.google.com/?q=${encodeURIComponent(targetLocation)}`;
   };
 
   const getPdfPreviewUrl = (path) => {
@@ -55,7 +56,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 
     const [formData, setFormData] = useState({
       panel_capacity: "",
-      system_capacity: "",
+      system_capacity: customer?.capacity_kw != null && customer.capacity_kw !== "" ? String(customer.capacity_kw) : "",
       feasibility: "Yes",
       project_cost: "",
       location: "",
@@ -63,7 +64,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
       ownership_change: "No",
       load_enhancement: "No",
       wifi: "No",
-      changes: ""
+      changes: "",
+      visited_date: ""
     });
 
     useEffect(() => {
@@ -139,7 +141,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
               ownership_change: data.visit.ownership_change || "No",
               load_enhancement: data.visit.load_enhancement || "No",
               wifi: data.visit.wifi || "No",
-              changes: data.visit.changes || ""
+              changes: data.visit.changes || "",
+              visited_date: data.visit.visited_date || ""
             });
             setExistingPhotos(data.visit.images || []);
           } else {
@@ -158,9 +161,17 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 
     const resetFormDataState = () => {
       setVisitData(null);
+      // No SiteVisit row exists yet for this customer (e.g. capacity_kw was
+      // only set at customer-creation time, which deliberately does not
+      // create a SiteVisit row — see backend comments in customers.py).
+      // Prefill System Capacity from the customer's capacity_kw so it isn't
+      // shown as blank when we already know the value.
+      const prefillCapacity = customer?.capacity_kw != null && customer.capacity_kw !== ""
+        ? String(customer.capacity_kw)
+        : "";
       setFormData({
         panel_capacity: "",
-        system_capacity: "",
+        system_capacity: prefillCapacity,
         feasibility: "Yes",
         project_cost: "",
         location: "",
@@ -168,7 +179,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
         ownership_change: "No",
         load_enhancement: "No",
         wifi: "No",
-        changes: ""
+        changes: "",
+        visited_date: ""
       });
       setExistingPhotos([]);
     };
@@ -321,7 +333,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 
       try {
         const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/site-visit/${customerId}/`, {
-          method: "POST",
+          method: "PUT",
           headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` },
           body: submitPayload
         });
@@ -393,48 +405,98 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
                 <div className="detail-data-grid">
                   <div className="detail-item-node">
                     <span className="node-label">Customer Name:</span>
-                    <span className="node-value">{visitData?.customer_name || customer?.name || "N/A"}</span>
+                    {visitData?.customer_name ? (
+                      <span className="node-value">{visitData.customer_name}</span>
+                    ) : (
+                      <span style={{ fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">Location Mapping:</span>
-                    <span className="node-value">
+                    
                       {visitData?.location ? (
+                        <span className="node-value">
                         <a href={getGoogleMapsUrl(visitData.location)} target="_blank" rel="noopener noreferrer" className="maps-hyperlink">
                           <FaMapMarkerAlt style={{ marginRight: "6px" }} />
                           {visitData.location.includes(" | ") ? visitData.location.split(" | ")[1] : "View Map Location"}
                         </a>
+                        </span>
                       ) : (
-                        "N/A"
+                        <span style={{ fontSize: "0.65rem", color: "#64748b" }}>No location data</span>
                       )}
-                    </span>
+                    
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">Panel Capacity:</span>
-                    <span className="node-value">{visitData?.panel_capacity ? `${visitData.panel_capacity} KW` : "N/A"}</span>
+                    {visitData?.panel_capacity ? (
+                      <span className="node-value">{`${visitData.panel_capacity} KW`}</span>
+                    ) : (
+                      <span style={{ fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">System Capacity:</span>
-                    <span className="node-value">{visitData?.system_capacity ? `${visitData.system_capacity} KW` : "N/A"}</span>
+                    
+                      {visitData?.system_capacity ? (
+                        <span className="node-value">
+                          {`${visitData.system_capacity} KW`}
+                        </span>
+                      ) : customer?.capacity_kw ? (
+                        <span className="node-value">
+                          {`${customer.capacity_kw} KW`}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+                      )}
+                   
+                  </div>
+                  <div className="detail-item-node">
+                    <span className="node-label">Visited Date:</span>
+                    {visitData?.visited_date ? (
+                      <span className="node-value">{new Date(visitData.visited_date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
+                    ) : (
+                      <span  style={{ fontSize: "0.65rem", color: "#64748b" }}>dd-mm-yyyy</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">Feasibility Status:</span>
-                    <span className="node-value">{visitData?.feasibility || "N/A"}</span>
+                    {visitData?.feasibility ? (
+                      <span className="node-value">{visitData.feasibility}</span>
+                    ) : (
+                      <span style={{ fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">Project Cost:</span>
-                    <span className="node-value text-emerald">{visitData?.project_cost ? `₹${parseFloat(visitData.project_cost).toLocaleString('en-IN')}` : "N/A"}</span>
+                    {visitData?.project_cost ? (
+                      <span className="node-value text-emerald">{`₹${parseFloat(visitData.project_cost).toLocaleString('en-IN')}`}</span>
+                    ) : (
+                      <span style={{ fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">Load Enhancement:</span>
-                    <span className="node-value">{visitData?.load_enhancement === "Yes" ? "Yes" : "No"}</span>
+                    {visitData?.load_enhancement === "Yes" ? (
+                      <span className="node-value">Yes</span>
+                    ) : (
+                      <span className="node-value">No</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">Ownership Change:</span>
-                    <span className="node-value">{visitData?.ownership_change === "Yes" ? "Yes" : "No"}</span>
+                    {visitData?.ownership_change === "Yes" ? (
+                      <span className="node-value">Yes</span>
+                    ) : (
+                      <span className="node-value">No</span>
+                    )}
                   </div>
                   <div className="detail-item-node">
                     <span className="node-label">WiFi Availability:</span>
-                    <span className="node-value">{visitData?.wifi === "Yes" ? "Yes" : "No"}</span>
+                    {visitData?.wifi === "Yes" ? (
+                      <span className="node-value">Yes</span>
+                    ) : (
+                      <span className="node-value">No</span>
+                    )}
                   </div>
                 </div>
 
@@ -446,7 +508,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
                 </div>
 
                 <div className="document-vault-section">
-                  <h4 className="vault-group-title">Contractual Agreements & Files</h4>
+                  <h4 className="vault-group-title">Primary Contract Upload</h4>
                   {visitData?.quotation_file || visitData?.agreement_file ? (
                     <div className="custom-box-card">
                       <div className="doc-preview-badge-row">
@@ -464,7 +526,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
                     </div>
                   ) : (
                     <div className="empty-record-placeholder-tray layout-margin-top-adjust">
-                      <p className="placeholder-primary-msg">No files available.</p>
+                      <p style={{ fontSize: "0.65rem", color: "#64748b" }}>no files uploaded</p>
                     </div>
                   )}
                 </div>
@@ -483,7 +545,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
                     </div>
                   ) : (
                     <div className="empty-record-placeholder-tray layout-margin-top-adjust">
-                      <p className="placeholder-primary-msg">No files uploaded.</p>
+                      <p style={{ fontSize: "0.65rem", color: "#64748b" }}>no verification documents uploaded</p>
                     </div>
                   )}
                 </div>
@@ -518,7 +580,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
           </div>
         ) : (
           <form onSubmit={triggerSaveConfirmation} className="interactive-form-workspace">
-            <h2 className="workspace-pane-title">{visitData?.id ? "Edit Site Visit Details" : "Add New Site Visit"}</h2>
+            <h2 className="workspace-pane-title">Edit Site Visit Details</h2>
             
           <div className="form-grid-layout">
     <div className="form-group-element">
@@ -549,6 +611,18 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
         required 
       />
     </div>
+   <div className="form-group-element">
+      <label>Visited Date*</label>
+      <input
+        type="date"
+        name="visited_date"
+        value={formData.visited_date ? new Date(formData.visited_date).toISOString().split("T")[0] : ""}
+        onChange={handleInputChange}
+        disabled={!canUpdate}
+        required
+      />
+    </div>
+
     <div className="form-group-element">
       <label>Structural Feasibility</label>
       <div className="thematic-radio-wrapper-row">
@@ -637,14 +711,14 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
             </div>
 
             <div className="vault-uploader-block" style={{ marginTop: "16px" }}>
-              <h4 className="vault-group-title">Primary Contract Schemes Upload</h4>
+              <h4 className="vault-group-title">Primary Contract Upload</h4>
               <div className="form-grid-layout">
                 <div className="form-group-element">
-                  <label>{visitData?.quotation_file && <span className="vault-upload-status-tick">✓ </span>}Quotation Asset (PDF)</label>
+                  <label>{visitData?.quotation_file && <span className="vault-upload-status-tick">✓ </span>}Quotation</label>
                   <input type="file" name="quotation_file" accept=".pdf" className="vault-raw-file-selector" onChange={handleDocumentChange} disabled={!canUpdate} />
                 </div>
                 <div className="form-group-element">
-                  <label>{visitData?.agreement_file && <span className="vault-upload-status-tick">✓ </span>}Formal Mutual Agreement (PDF)</label>
+                  <label>{visitData?.agreement_file && <span className="vault-upload-status-tick">✓ </span>}Agreement</label>
                   <input type="file" name="agreement_file" accept=".pdf" className="vault-raw-file-selector" onChange={handleDocumentChange} disabled={!canUpdate} />
                 </div>
               </div>

@@ -53,7 +53,7 @@ const C_Profile = () => {
   const [profilePhotoFile, setProfilePhotoFile] = useState(null);
   const [imagePreview, setImagePreview] = useState('https://upload.wikimedia.org/wikipedia/commons/2/2c/Default_pfp.svg');
 
-  const modulePermissions = permissions?.["Customer Profile"] || { view: true, update: false, delete: false };
+  const modulePermissions = permissions?.["Customer Profile"] || { view: false, update: false, delete: false };
   const canView = isAdmin || role === 'admin' || modulePermissions.view;
   const canUpdate = isAdmin || role === 'admin' || modulePermissions.update;
   const canDelete = isAdmin || role === 'admin' || modulePermissions.delete;
@@ -421,10 +421,15 @@ const C_Profile = () => {
 
               <div className="detail-item-node">
                 <span className="node-label">System Capacity (KW):</span>
+                {isEditing && !!formData.capacity_kw>0 && (
+                <span style={{ fontSize: '0.6rem', color: '#94a3b8' }}>
+                  * its only reading please update site visit page
+                </span>
+                )}
                 {isEditing && canUpdate ? (
-                  <input type="number" step="0.01" name="capacity_kw" value={formData.capacity_kw} onChange={handleInputChange} className="control-input-field" required onWheel={(e) => e.target.blur()} />
+                  <input type="number" step="0.01" name="capacity_kw" value={formData.capacity_kw} onChange={handleInputChange} className="control-input-field" required onWheel={(e) => e.target.blur()} readOnly={!!formData.capacity_kw>0} />
                 ) : (
-                  <span className="node-value text-emerald">{customer.capacity_kw || '0.00'} KW</span>
+                  <span className="node-value">{customer.capacity_kw || '0.00'} KW</span>
                 )}
               </div>
             </div>

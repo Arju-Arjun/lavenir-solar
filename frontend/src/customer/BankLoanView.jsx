@@ -423,13 +423,17 @@ const BankLoanView = ({ customerId }) => {
                   <>
                     <div className="detail-item-node">
                       <span className="node-label">Jansamarth Status:</span>
-                      <span className="node-value" style={{ color: loanData.jansamarth_status === "Completed" ? "#10b981" : "#e00a0a" }}>
+                      <span className={`status-badge-token-mnre ${loanData.jansamarth_status === "Completed" ? "mnre-status-badge-completed" : "mnre-status-badge-pending"}`}>
                         {loanData.jansamarth_status}
                       </span>
                     </div>
                     <div className="detail-item-node">
                       <span className="node-label">Document Submission Route:</span>
-                      <span className="node-value">{loanData.document_submission || "N/A"}</span>
+                      {loanData.document_submission ? (
+                        <span className="node-value">{loanData.document_submission}</span>
+                      ) : (
+                        <span style={{fontSize: "0.65rem", color: "#64748b" }}>N/A</span>
+                      )}
                     </div>
                   </>
                 )}

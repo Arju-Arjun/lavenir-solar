@@ -260,7 +260,7 @@ export default function KsebRegistration({ customerId }) {
           <div className="detail-data-grid">
             <div className="detail-item-node">
               <span className="node-label">Registration Submitted:</span>
-              <span className="node-value" style={{ color: registration?.registration_submitted ? "#16a34a" : "#dc2626", fontWeight: "600" }}>
+              <span  className={`status-badge-token-mnre ${registration?.registration_submitted ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {registration?.registration_submitted ? 'Yes' : 'No'}
               </span>
               {registration?.registration_date && (
@@ -271,7 +271,7 @@ export default function KsebRegistration({ customerId }) {
             </div>
             <div className="detail-item-node">
               <span className="node-label">Completion Submitted:</span>
-              <span className="node-value" style={{ color: registration?.completion_submitted ? "#16a34a" : "#dc2626", fontWeight: "600" }}>
+              <span className={`status-badge-token-mnre ${registration?.completion_submitted ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {registration?.completion_submitted ? 'Yes' : 'No'}
               </span>
               <span className="payment-flow-date-badge">
@@ -280,7 +280,7 @@ export default function KsebRegistration({ customerId }) {
             </div>
             <div className="detail-item-node">
               <span className="node-label">Agreement Submitted:</span>
-              <span className="node-value" style={{ color: registration?.agreement_submitted ? "#16a34a" : "#dc2626", fontWeight: "600" }}>
+              <span className={`status-badge-token-mnre ${registration?.agreement_submitted ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {registration?.agreement_submitted ? 'Yes' : 'No'}
               </span>
               {registration?.agreement_date && (
@@ -291,7 +291,7 @@ export default function KsebRegistration({ customerId }) {
             </div>
             <div className="detail-item-node">
               <span className="node-label">Payment Done:</span>
-              <span className="node-value" style={{ color: registration?.payment_done ? "#16a34a" : "#dc2626", fontWeight: "600" }}>
+              <span className={`status-badge-token-mnre ${registration?.payment_done ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {registration?.payment_done ? 'Yes' : 'No'}
               </span>
               {registration?.payment_date && (
@@ -302,7 +302,7 @@ export default function KsebRegistration({ customerId }) {
             </div>
             <div className="detail-item-node">
               <span className="node-label">Plant Energized:</span>
-              <span className="node-value" style={{ color: registration?.plant_energized ? "#16a34a" : "#dc2626", fontWeight: "600" }}>
+              <span className={`status-badge-token-mnre ${registration?.plant_energized ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {registration?.plant_energized ? 'Yes' : 'No'}
               </span>
               {registration?.plant_energized_date && (
@@ -314,7 +314,7 @@ export default function KsebRegistration({ customerId }) {
             {(wifi === 'Yes' || wifi === true) && (
               <div className="detail-item-node">
                 <span className="node-label">WiFi Configured:</span>
-                <span className="node-value" style={{ color: registration?.wifi_configured ? "#16a34a" : "#dc2626", fontWeight: "600" }}>
+                <span className={`status-badge-token-mnre ${registration?.wifi_configured ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                   {registration?.wifi_configured ? 'Yes' : 'No'}
                 </span>
                 {registration?.wifi_configured_date && (

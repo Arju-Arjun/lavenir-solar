@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FaSearch, FaUser, FaCheckCircle, FaTools, FaFolderOpen } from 'react-icons/fa';
+import { FaSearch, FaUser, FaCheckCircle, FaTools, FaFolderOpen,FaProjectDiagram } from 'react-icons/fa';
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL}/api`;
 
@@ -88,10 +88,13 @@ function WorkflowView() {
 
   return (
     <div className="customers-view-container">
-      <div className="dashboard-view-header">
-        <h2>Customer Workflow</h2>
+      {/* <div className="dashboard-view-header"> */}
+        <div className="profile-header-summary-card">
+          
+        <h2>📋 Customer Workflow</h2>
+        </div>
         <p className="welcome-back-text">Track per-module progress and pending items for each customer.</p>
-      </div>
+  
 
       <div className="document-vault-grid">
 

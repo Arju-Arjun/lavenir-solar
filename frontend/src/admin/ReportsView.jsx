@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { reportsApi } from '../utils/dashboardApi';
 
-// jsPDF is optional - only needed for the "Download PDF" button.
-// npm install jspdf
+// jsPDF and jsPDF-autotable for multi-page PDF generation with watermark support
 import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const PERIOD_OPTIONS = [
   { value: 'last_week', label: 'Last Week' },
@@ -30,26 +30,107 @@ function downloadTxt(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-function downloadPdf(filename, title, text) {
+// Helper to load watermark logo if available
+async function loadWatermarkLogo() {
+  // Placeholder or standard logo fetch mechanism if needed
+  return { dataUrl: '', aspect: 1 };
+}
+
+async function downloadPdf(filename, title, text, customerInfo = {}) {
   const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const marginLeft = 14;
-  const marginTop = 20;
-  const pageWidth = doc.internal.pageSize.getWidth() - marginLeft * 2;
+  let currentY = 20;
 
-  doc.setFontSize(14);
-  doc.text(title, marginLeft, marginTop);
+  // Header Title Two-Tone
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  const partOne = "Lavenir ";
+  const partTwo = "Solar";
+  const partOneWidth = doc.getStringUnitWidth(partOne) * doc.getFontSize() / doc.internal.scaleFactor;
+  const partTwoWidth = doc.getStringUnitWidth(partTwo) * doc.getFontSize() / doc.internal.scaleFactor;
+  const titleStartX = (pageWidth - (partOneWidth + partTwoWidth)) / 2;
 
-  doc.setFontSize(11);
-  const lines = doc.splitTextToSize(text, pageWidth);
-  doc.text(lines, marginLeft, marginTop + 10);
+  doc.setTextColor(4, 44, 83);
+  doc.text(partOne, titleStartX, currentY, { align: "left" });
+
+  doc.setTextColor(186, 117, 23);
+  doc.text(partTwo, titleStartX + partOneWidth, currentY, { align: "left" });
+
+  currentY += 7;
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(60, 60, 60);
+  doc.text(title, pageWidth / 2, currentY, { align: "center" });
+
+  currentY += 10;
+  doc.setFontSize(10);
+
+  // If customer info is provided, display personal details line by line
+  if (customerInfo.name || customerInfo.id || customerInfo.district || customerInfo.place || customerInfo.capacity) {
+    if (customerInfo.name) {
+      doc.text(`Customer Name: ${customerInfo.name}`, marginLeft, currentY);
+      currentY += 6;
+    }
+    if (customerInfo.id) {
+      doc.text(`Customer ID: ${customerInfo.id}`, marginLeft, currentY);
+      currentY += 6;
+    }
+    if (customerInfo.district) {
+      doc.text(`District: ${customerInfo.district}`, marginLeft, currentY);
+      currentY += 6;
+    }
+    if (customerInfo.place) {
+      doc.text(`Place: ${customerInfo.place}`, marginLeft, currentY);
+      currentY += 6;
+    }
+    if (customerInfo.capacity) {
+      doc.text(`Capacity: ${customerInfo.capacity} kW`, marginLeft, currentY);
+      currentY += 6;
+    }
+    currentY += 4;
+  }
+
+  // Split report content into printable chunks/paragraphs for multi-page support
+  doc.setFontSize(10);
+  doc.setTextColor(20, 20, 20);
+  const splitText = doc.splitTextToSize(text, pageWidth - (marginLeft * 2));
+
+  // Use autoTable or direct multi-page text insertion
+  let cursorY = currentY;
+  for (let i = 0; i < splitText.length; i++) {
+    if (cursorY > pageHeight - 20) {
+      doc.addPage();
+      cursorY = 20;
+    }
+    doc.text(splitText[i], marginLeft, cursorY);
+    cursorY += 6;
+  }
+
+  // Watermark implementation across all pages
+  try {
+    const { dataUrl, aspect } = await loadWatermarkLogo();
+    if (dataUrl) {
+      const watermarkWidth = pageWidth * 0.6;
+      const watermarkHeight = watermarkWidth / aspect;
+      const x = (pageWidth - watermarkWidth) / 2;
+      const y = (pageHeight - watermarkHeight) / 2;
+
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let p = 1; p <= totalPages; p++) {
+        doc.setPage(p);
+        doc.addImage(dataUrl, "PNG", x, y, watermarkWidth, watermarkHeight);
+      }
+    }
+  } catch (err) {
+    console.error("Failed to add watermark logo to PDF:", err);
+  }
 
   doc.save(filename);
 }
 
-// Generic search-as-you-type dropdown. Opens on focus (showing an initial
-// unfiltered list from fetchOptions('')), then re-queries on a 300ms
-// debounce as the person types. Selecting an option locks the input to its
-// label; typing again clears the selection and re-opens the list.
+// Generic search-as-you-type dropdown
 function SearchableSelect({
   value,
   onSelect,
@@ -84,7 +165,6 @@ function SearchableSelect({
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => runSearch(query), 300);
     return () => clearTimeout(debounceRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, open]);
 
   useEffect(() => {
@@ -174,24 +254,18 @@ function SearchableSelect({
 }
 
 export default function ReportsView() {
-  const [reportType, setReportType] = useState('customer'); // 'customer' | 'staff'
+  const [reportType, setReportType] = useState('customer');
 
-  // ---- Customer Report state ----
-  // selectedCustomer: { customer_id, customer_name, phone_number, place, district } | null
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-
-  // ---- Staff Report state ----
-  // selectedStaff: { id, full_name, employee_id, department, role } | null
   const [selectedStaff, setSelectedStaff] = useState(null);
   const [period, setPeriod] = useState('last_week');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  // ---- Shared state ----
   const [language, setLanguage] = useState('english');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [report, setReport] = useState(null); // { report, customer_name/staff_name, ... }
+  const [report, setReport] = useState(null);
 
   const resetOutput = () => {
     setError('');
@@ -246,16 +320,14 @@ export default function ReportsView() {
 
   return (
     <div className="customers-view-container">
-      <h2 style={{ marginBottom: '1rem' }}>Reports</h2>
+      <div className="profile-header-summary-card"><h2>📋 Reports</h2></div>
+      
 
-      {/* Report type toggle */}
       <div className="control-filter-panel">
         <div className="dropdown-controls-group">
           <button
             className="btn-primary"
-            style={{
-              opacity: reportType === 'customer' ? 1 : 0.55,
-            }}
+            style={{ opacity: reportType === 'customer' ? 1 : 0.55 }}
             onClick={() => {
               setReportType('customer');
               setSelectedStaff(null);
@@ -266,9 +338,7 @@ export default function ReportsView() {
           </button>
           <button
             className="btn-primary"
-            style={{
-              opacity: reportType === 'staff' ? 1 : 0.55,
-            }}
+            style={{ opacity: reportType === 'staff' ? 1 : 0.55 }}
             onClick={() => {
               setReportType('staff');
               setSelectedCustomer(null);
@@ -280,7 +350,6 @@ export default function ReportsView() {
         </div>
       </div>
 
-      {/* Input section */}
       <div className="control-filter-panel">
         {reportType === 'customer' ? (
           <SearchableSelect
@@ -390,7 +459,15 @@ export default function ReportsView() {
             </button>
             <button
               className="btn-primary"
-              onClick={() => downloadPdf(`${baseFilename}.pdf`, reportTitle, report.report)}
+              onClick={() =>
+                downloadPdf(`${baseFilename}.pdf`, reportTitle, report.report, {
+                  name: selectedCustomer?.customer_name,
+                  id: selectedCustomer?.customer_id,
+                  district: selectedCustomer?.district,
+                  place: selectedCustomer?.place,
+                  capacity: selectedCustomer?.capacity_kw,
+                })
+              }
             >
               Download PDF
             </button>

@@ -3,7 +3,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, User, CustomerProject, MNREProfile, BankLoan, CustomerAuditLog
 from utils import (
     check_permission, 
-    delete_cloudinary_file, 
+    delete_r2_file, 
+    upload_to_r2,
     handle_blueprint_check_access, 
     handle_blueprint_request_access,
     get_module_folder_path,
@@ -11,8 +12,6 @@ from utils import (
 )
 from datetime import datetime
 from decimal import Decimal
-import cloudinary
-import cloudinary.uploader
 import json
 
 bank_loan_bp = Blueprint('bank_loan_bp', __name__)
@@ -131,12 +130,7 @@ def save_bank_loan(customer_id):
         else:
             new_need_loan = loan.need_loan if loan else True
 
-        # ------------------------------------------------------------------
-        # Loan not required -> clear all of its data and mark the module
-        # Completed, but keep the row itself (see loan.work_done line
-        # below) so other queries that look for a BankLoan.work_done value
-        # per project still see this module as done rather than missing.
-        # ------------------------------------------------------------------
+
         if not new_need_loan:
             action = "UPDATE" if loan else "CREATE"
             if not loan:
@@ -174,7 +168,7 @@ def save_bank_loan(customer_id):
 
             if loan.acknowledgement_file:
                 old_file_url = loan.acknowledgement_file
-                delete_cloudinary_file(old_file_url, folder_path)
+                delete_r2_file(old_file_url)
                 changes['acknowledgement_file'] = {"old": old_file_url, "new": None}
                 loan.acknowledgement_file = None
 
@@ -182,7 +176,10 @@ def save_bank_loan(customer_id):
             # A loan that isn't needed has nothing left to complete, so
             # this module counts as done for aggregate/project-status
             # reporting instead of showing up as perpetually pending.
+            old_work_done = loan.work_done
             loan.work_done = 'Completed'
+            if old_work_done != loan.work_done:
+                changes['work_done'] = {"old": old_work_done, "new": loan.work_done}
 
             loan.updated_by = uid
             loan.updated_at = datetime.utcnow()
@@ -281,19 +278,19 @@ def save_bank_loan(customer_id):
             file_obj = request.files['acknowledgement_file']
             if file_obj and file_obj.filename != '':
                 # Upload the replacement first and only delete the old file
-                # once the new one is confirmed on Cloudinary, so a failed
-                # upload never leaves the customer with no file at all.
+                # once the new one is confirmed on R2, so a failed upload
+                # never leaves the customer with no file at all.
                 old_file_url = loan.acknowledgement_file
-                # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
-                # extension automatically), giving lavenir/{customer}_{id}/bankloan/{doctype}_{id}.{ext}
-                public_id = f"{sanitize_path_segment('acknowledgement_file')}_{sanitize_path_segment(cust.customer_id)}"
-                res = cloudinary.uploader.upload(
-                    file_obj, folder=folder_path, public_id=public_id, overwrite=True
+                ext = file_obj.filename.rsplit('.', 1)[-1] if '.' in file_obj.filename else 'bin'
+                object_key = (
+                    f"{folder_path}/{sanitize_path_segment('acknowledgement_file')}"
+                    f"_{sanitize_path_segment(cust.customer_id)}.{ext}"
                 )
+                new_file_url = upload_to_r2(file_obj, object_key, content_type=file_obj.mimetype)
                 if old_file_url:
-                    delete_cloudinary_file(old_file_url, folder_path)
-                changes['acknowledgement_file'] = {"old": old_file_url, "new": res['secure_url']}
-                loan.acknowledgement_file = res['secure_url']
+                    delete_r2_file(old_file_url)
+                changes['acknowledgement_file'] = {"old": old_file_url, "new": new_file_url}
+                loan.acknowledgement_file = new_file_url
 
         # Recalculate due amount after potential updates to totals
         loan.due_amount = float(loan.total_approved_loan_amount or 0) - float(loan.total_loan_amount or 0)
@@ -306,7 +303,11 @@ def save_bank_loan(customer_id):
             loan.acknowledgement_file):
             is_work_done = True
 
+        old_work_done = loan.work_done
         loan.work_done = 'Completed' if is_work_done else 'Pending'
+        if old_work_done != loan.work_done:
+            changes['work_done'] = {"old": old_work_done, "new": loan.work_done}
+
         loan.updated_by = uid
         loan.updated_at = datetime.utcnow()
 

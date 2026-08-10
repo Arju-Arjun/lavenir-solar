@@ -2,11 +2,10 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 import json
-import cloudinary.uploader
 
-from models import db, Complaint, ComplaintAttachment, ComplaintComment, CustomerProject, User, CustomerAuditLog
-from utils import is_admin_user, get_module_folder_path, sanitize_path_segment, delete_cloudinary_file
-from routes.notification_rules import notify_module_staff, notify_assignee_and_admins
+from models import db, Complaint, ComplaintAssignee, ComplaintAttachment, ComplaintComment, CustomerProject, User, CustomerAuditLog
+from utils import is_admin_user, check_permission, get_module_folder_path, sanitize_path_segment, delete_r2_file, upload_to_r2
+from routes.notification_rules import notify_module_staff, notify_assignee_and_admins, notify_assignees_and_admins
 
 complaints_bp = Blueprint('complaints_bp', __name__)
 
@@ -19,6 +18,95 @@ CLOSED_STATUSES = Complaint.CLOSED_STATUSES
 PRIORITY_RANK = {'Urgent': 3, 'High': 2, 'Medium': 1, 'Low': 0}
 
 CATEGORY_MAX_LEN = 30
+
+# Staff who hold "update" permission on this module can edit/act on any
+# complaint that has *no* assignee yet. Once a complaint is assigned, only
+# the assignee(s) (+ admin) may edit it, regardless of this permission.
+# Matches NOTIF_TYPE_MODULE_MAP's ["Complaints", "Service"] fan-out in
+# notification_rules.py - most staff who handle complaints only hold a
+# 'Service' grant, not a separate 'Complaints' one.
+UNASSIGNED_EDIT_PERMISSION_MODULES = ['Complaints', 'Service']
+
+
+def _can_edit_complaint(complaint, user_id):
+    """Central permission check for editing/updating a complaint.
+
+    - Admin: always allowed.
+    - Assigned complaint: only the assigned staff (any one of them) + admin.
+    - Unassigned complaint: admin + any staff holding 'update' on
+      'Complaints' or 'Service'.
+    """
+    if is_admin_user(user_id):
+        return True
+    if complaint.is_assigned:
+        return user_id in complaint.assignee_ids
+    return any(
+        check_permission(user_id, 'update', module)
+        for module in UNASSIGNED_EDIT_PERMISSION_MODULES
+    )
+
+
+def _parse_assignee_ids(data):
+    """Accepts assigned_to as a repeated form field ('assigned_to' multiple
+    values), a JSON array string, or a single id - always returns a list of
+    ints (empty list means 'unassign everyone')."""
+    raw_values = None
+    if hasattr(data, 'getlist'):
+        raw_values = data.getlist('assigned_to')
+    if not raw_values:
+        single = data.get('assigned_to')
+        if single is None or single == '':
+            return None  # field wasn't sent at all - caller should leave assignment untouched
+        if isinstance(single, list):
+            raw_values = single
+        else:
+            single = single.strip() if isinstance(single, str) else single
+            if isinstance(single, str) and single.startswith('['):
+                try:
+                    raw_values = json.loads(single)
+                except Exception:
+                    raw_values = [single]
+            else:
+                raw_values = [single]
+
+    ids = []
+    for v in raw_values:
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _sync_assignees(complaint, assignee_ids, assigned_by):
+    """Replace complaint's assignee set with assignee_ids (list of user
+    ids). Validates every id is a real, active staff/user before applying.
+    Returns the list of newly added User objects (for notifications)."""
+    if assignee_ids is None:
+        return []
+
+    valid_users = User.query.filter(User.id.in_(assignee_ids)).all() if assignee_ids else []
+    valid_ids = {u.id for u in valid_users}
+
+    current_ids = set(complaint.assignee_ids)
+    target_ids = valid_ids
+
+    # remove assignees no longer in the target set
+    for link in list(complaint.assignee_links):
+        if link.user_id not in target_ids:
+            db.session.delete(link)
+
+    newly_added = []
+    for user in valid_users:
+        if user.id not in current_ids:
+            db.session.add(ComplaintAssignee(
+                complaint_id=complaint.id,
+                user_id=user.id,
+                assigned_by=assigned_by
+            ))
+            newly_added.append(user)
+
+    return newly_added
 
 
 def _resolve_category(raw_category):
@@ -53,21 +141,19 @@ def _incoming_files():
 
 
 def _save_attachments(complaint, files, uploaded_by):
-    """Upload each file to Cloudinary and create a ComplaintAttachment row for it."""
+    """Upload each file to R2 and create a ComplaintAttachment row for it."""
     if not files:
         return []
     customer = complaint.customer
     folder_path = get_module_folder_path(customer.customer_name, customer.customer_id, 'complaints')
     saved = []
     for f in files:
-        upload_result = cloudinary.uploader.upload(
-            f,
-            folder=folder_path,
-            public_id=f"{complaint.complaint_number}_{sanitize_path_segment(f.filename)}"
-        )
+        ext = f.filename.rsplit('.', 1)[-1] if '.' in f.filename else 'bin'
+        object_key = f"{folder_path}/{complaint.complaint_number}_{sanitize_path_segment(f.filename)}.{ext}"
+        file_url = upload_to_r2(f, object_key, content_type=f.mimetype)
         attachment = ComplaintAttachment(
             complaint_id=complaint.id,
-            file_url=upload_result.get('secure_url'),
+            file_url=file_url,
             file_name=f.filename,
             uploaded_by=uploaded_by
         )
@@ -150,15 +236,15 @@ def create_complaint():
     if priority not in VALID_PRIORITIES:
         priority = 'Medium'
 
-    assignee = None
-    raw_assigned_to = data.get('assigned_to')
+    requested_assignee_ids = _parse_assignee_ids(data) or []
+    if requested_assignee_ids and not is_admin_user(current_user_id):
+        return jsonify({"error": "Only admins can assign complaints.", "code": "ADMIN_ONLY_ASSIGN"}), 403
 
-    if raw_assigned_to:
-        if not is_admin_user(current_user_id):
-            return jsonify({"error": "Only admins can assign complaints.", "code": "ADMIN_ONLY_ASSIGN"}), 403
-        assignee = User.query.get(raw_assigned_to)
-        if not assignee:
-            return jsonify({"error": "Selected staff member was not found."}), 400
+    assignee_users = []
+    if requested_assignee_ids:
+        assignee_users = User.query.filter(User.id.in_(requested_assignee_ids)).all()
+        if not assignee_users:
+            return jsonify({"error": "Selected staff member(s) were not found."}), 400
 
     district_snapshot = (data.get('district_snapshot') or customer.district or '').strip()
     place_snapshot = (data.get('place_snapshot') or customer.place or '').strip()
@@ -171,8 +257,7 @@ def create_complaint():
         priority=priority,
         district_snapshot=district_snapshot,
         place_snapshot=place_snapshot,
-        status='Assigned' if assignee else 'Open',
-        assigned_to=assignee.id if assignee else None,
+        status='Assigned' if assignee_users else 'Open',
         created_by=current_user_id,
         updated_by=current_user_id,
         complaint_number='PENDING'
@@ -183,12 +268,20 @@ def create_complaint():
         db.session.flush()
         complaint.complaint_number = f"CMP-{complaint.id:05d}"
         complaint.compute_sla_due_at(from_time=complaint.created_at or datetime.utcnow())
+        complaint.reset_reminder_clock(at=complaint.created_at or datetime.utcnow())
+
+        for user in assignee_users:
+            db.session.add(ComplaintAssignee(
+                complaint_id=complaint.id,
+                user_id=user.id,
+                assigned_by=current_user_id
+            ))
 
         _save_attachments(complaint, files, uploaded_by=current_user_id)
 
         log_payload = {"subject": subject, "category": category, "priority": priority}
-        if assignee:
-            log_payload["assigned_to"] = assignee.id
+        if assignee_users:
+            log_payload["assigned_to"] = [u.id for u in assignee_users]
         _log_action(customer.id, current_user_id, 'CREATE', log_payload)
 
         db.session.commit()
@@ -197,9 +290,9 @@ def create_complaint():
         return jsonify({"error": f"Failed to register complaint: {str(e)}"}), 500
 
     notification_url = f"/customer-profile/{customer.customer_id}?tab=complaints"
-    if assignee:
-        notify_assignee_and_admins(
-            assignee.id,
+    if assignee_users:
+        notify_assignees_and_admins(
+            [u.id for u in assignee_users],
             title="Complaint Assigned to You",
             body=f"{complaint.complaint_number}: {subject} ({priority} priority) - {customer.customer_name}",
             url=notification_url
@@ -285,6 +378,9 @@ def edit_complaint(complaint_id):
     if not complaint:
         return jsonify({"error": "Complaint not found"}), 404
 
+    if not _can_edit_complaint(complaint, current_user_id):
+        return jsonify({"error": "You don't have permission to update this complaint."}), 403
+
     data = request.form if request.form else request.get_json() or {}
     files = _incoming_files()
 
@@ -325,16 +421,23 @@ def edit_complaint(complaint_id):
             complaint.closed_at = None
             complaint.reopen_count = (complaint.reopen_count or 0) + 1
             complaint.compute_sla_due_at(from_time=now)
+            # Restart the reminder-escalation countdown from "now" instead of
+            # letting it inherit the elapsed time from before the complaint
+            # was resolved - otherwise it would immediately fire at an
+            # escalated (multi-per-day) rate right after reopening.
+            complaint.reset_reminder_clock(at=now)
 
     if 'resolution_notes' in data:
         complaint.resolution_notes = data.get('resolution_notes')
 
-    if 'assigned_to' in data and is_admin_user(current_user_id):
-        assignee = User.query.get(data.get('assigned_to')) if data.get('assigned_to') else None
-        if assignee:
-            complaint.assigned_to = assignee.id
-            if complaint.status in ('Open', 'Reopened'):
-                complaint.status = 'Assigned'
+    newly_added_assignees = []
+    requested_assignee_ids = _parse_assignee_ids(data)
+    if requested_assignee_ids is not None:
+        if not is_admin_user(current_user_id):
+            return jsonify({"error": "Only admins can assign complaints.", "code": "ADMIN_ONLY_ASSIGN"}), 403
+        newly_added_assignees = _sync_assignees(complaint, requested_assignee_ids, assigned_by=current_user_id)
+        if requested_assignee_ids and complaint.status in ('Open', 'Reopened'):
+            complaint.status = 'Assigned'
 
     complaint.updated_by = current_user_id
 
@@ -347,6 +450,15 @@ def edit_complaint(complaint_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Failed to update complaint: {str(e)}"}), 500
+
+    if newly_added_assignees:
+        notification_url = f"/customer-profile/{complaint.customer.customer_id}?tab=complaints" if complaint.customer else '/'
+        notify_assignees_and_admins(
+            [u.id for u in newly_added_assignees],
+            title="Complaint Assigned to You",
+            body=f"{complaint.complaint_number}: {complaint.subject} ({complaint.priority} priority)",
+            url=notification_url
+        )
 
     return jsonify({"message": "Complaint updated successfully.", "complaint": complaint.to_dict()}), 200
 
@@ -389,10 +501,7 @@ def delete_attachment(complaint_id, attachment_id):
 
     try:
         if complaint.customer:
-            folder_path = get_module_folder_path(
-                complaint.customer.customer_name, complaint.customer.customer_id, 'complaints'
-            )
-            delete_cloudinary_file(attachment.file_url, folder_path)
+            delete_r2_file(attachment.file_url)
 
         db.session.delete(attachment)
         _log_action(complaint.customer_project_id, current_user_id, 'UPDATE',
@@ -472,6 +581,9 @@ def delete_comment(complaint_id, comment_id):
 def delete_complaint(complaint_id):
     current_user_id = int(get_jwt_identity())
 
+    if not is_admin_user(current_user_id):
+        return jsonify({"error": "Only admins can delete complaints."}), 403
+
     complaint = Complaint.query.get(complaint_id)
     if not complaint:
         return jsonify({"error": "Complaint not found"}), 404
@@ -484,11 +596,8 @@ def delete_complaint(complaint_id):
     )
 
     if complaint.attachments and complaint.customer:
-        folder_path = get_module_folder_path(
-            complaint.customer.customer_name, complaint.customer.customer_id, 'complaints'
-        )
         for attachment in list(complaint.attachments):
-            delete_cloudinary_file(attachment.file_url, folder_path)
+            delete_r2_file(attachment.file_url)
 
     # ComplaintAttachment and ComplaintComment rows cascade-delete automatically
     # (cascade="all, delete-orphan" + ondelete='CASCADE' on the FK).

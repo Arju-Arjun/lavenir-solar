@@ -133,7 +133,13 @@ class SiteVisit(db.Model):
     __tablename__ = 'site_visits'
     
     id = db.Column(db.Integer, primary_key=True)
-    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
+    # unique=True: one SiteVisit row per customer, enforced at the DB level.
+    # Without this, two near-simultaneous saves (double-click / retry) can
+    # both see "no existing visit" and both INSERT, leaving two rows for the
+    # same customer. .first() then has no reliable way to know which row is
+    # "current", so GET/UPDATE can silently pick the stale one -> values
+    # look like they "revert to a previous update".
+    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     
     panel_capacity = db.Column(db.Numeric(10, 2), nullable=True, default=0.00)
     system_capacity = db.Column(db.Numeric(10, 2), nullable=True, default=0.00)
@@ -157,6 +163,7 @@ class SiteVisit(db.Model):
     load_enhancement = db.Column(db.String(10), nullable=True, default='No')
     wifi = db.Column(db.String(10), nullable=True, default='No')
     changes = db.Column(db.Text, nullable=True)
+    visited_date = db.Column(db.DateTime, default=datetime.utcnow)
     
     work_done = db.Column(db.String(30), default='Pending', nullable=False)
     
@@ -201,6 +208,7 @@ class SiteVisit(db.Model):
             "wifi": self.wifi,
             "changes": self.changes,
             "work_done": self.work_done,
+            "visited_date": self.visited_date.isoformat() if self.visited_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "created_by_name": self.creator.full_name if self.creator else "System",
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -213,7 +221,10 @@ class MNREProfile(db.Model):
     __tablename__ = 'mnre_profiles'
     
     id = db.Column(db.Integer, primary_key=True)
-    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
+    # unique=True: relationship below is uselist=False (one MNREProfile per
+    # customer) but the FK wasn't enforcing that at the DB level - same
+    # duplicate-row risk as SiteVisit had.
+    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     
     enabled = db.Column(db.Boolean, default=False, nullable=False)
     mnre_status = db.Column(db.String(50), default='Pending', nullable=False)
@@ -451,6 +462,8 @@ class KSEB(db.Model):
 
     feasibility_status = db.Column(db.String(50), default='pending', nullable=False)
     fee_paid = db.Column(db.Boolean, default=False, nullable=False)
+    payment_date = db.Column(db.DateTime, nullable=True)
+    visiter_name = db.Column(db.String(100), nullable=True) 
 
     comments = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -465,7 +478,7 @@ class KSEB(db.Model):
     customer = db.relationship('CustomerProject', backref=db.backref('kseb_records', cascade="all, delete-orphan", lazy=True))
     creator = db.relationship('User', foreign_keys=[created_by], backref='created_kseb_records')
     modifier = db.relationship('User', foreign_keys=[updated_by], backref='modified_kseb_records')
-    work_done = db.Column(db.String(50), default='pending', nullable=False)
+    work_done = db.Column(db.String(50), default='Pending', nullable=False)
 
     def to_dict(self, site_visit_data=None):
         return {
@@ -476,6 +489,8 @@ class KSEB(db.Model):
             "feasibility_status": self.feasibility_status,
             "fee_paid": self.fee_paid,
             "comments": self.comments,
+            "payment_date": self.payment_date.isoformat() if self.payment_date else None,
+            "visiter_name": self.visiter_name,
             "work_done": self.work_done,
             "ownership_status": getattr(self, 'ownership_status', None),
             "ownership_comment": getattr(self, 'ownership_comment', None),
@@ -654,13 +669,24 @@ class MaterialDelivery(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
 
+    # unique=True: relationship below is uselist=False (one delivery record
+    # per customer) but the FK wasn't enforcing that at the DB level - same
+    # duplicate-row risk as SiteVisit had.
     customer_project_id = db.Column(
         db.Integer,
         db.ForeignKey("customer_projects.id"),
-        nullable=False
+        nullable=False,
+        unique=True
     )
 
-    delivery_date = db.Column(db.Date, nullable=False)
+    # nullable=True: this gets auto-created as a bare stub (see
+    # update_material_delivery in material.py) as soon as material items are
+    # entered via MaterialItem.jsx, before the user has touched the actual
+    # "Delivery Date" field. It used to be NOT NULL, which forced the stub
+    # to be filled with today's date as a placeholder - so the date field
+    # showed a date the user never entered, on a delivery they hadn't
+    # edited yet.
+    delivery_date = db.Column(db.Date, nullable=True)
 
     electrical_delivered = db.Column(db.Boolean, default=False, nullable=False)
     structure_delivered = db.Column(db.Boolean, default=False, nullable=False)
@@ -671,7 +697,12 @@ class MaterialDelivery(db.Model):
     structure_changes = db.Column(db.Text, nullable=True)
 
     delivery_images = db.Column(db.Text, nullable=True)
-    delivery_document = db.Column(db.String(255), nullable=True)
+    # Text, not String(255): this stores a JSON-encoded LIST of document URLs
+    # (see material.py's _upload_documents / create_material_delivery /
+    # update_material_delivery), not a single URL. String(255) overflows as
+    # soon as 2+ documents are uploaded (Cloudinary URLs run ~80-120 chars
+    # each), causing a DB error on save or a truncated/corrupt JSON value.
+    delivery_document = db.Column(db.Text, nullable=True)
 
     delivered_by = db.Column(db.String(100), nullable=True)
     received_by = db.Column(db.String(100), nullable=True)
@@ -728,7 +759,10 @@ class MaterialInstallation(db.Model):
     __tablename__ = "material_installations"
 
     id = db.Column(db.Integer, primary_key=True)
-    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False)
+    # unique=True: relationship below is uselist=False (one installation
+    # record per customer) but the FK wasn't enforcing that at the DB level -
+    # same duplicate-row risk as SiteVisit had.
+    customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id'), nullable=False, unique=True)
     electrical_installed = db.Column(db.Boolean, default=False, nullable=False)
     structure_installed = db.Column(db.Boolean, default=False, nullable=False)
     installation_team = db.Column(db.String(100), nullable=True)
@@ -811,27 +845,22 @@ class MaterialDeliveryItem(db.Model):
 
 
 class Complaint(db.Model):
-    """
-    Full rebuild of the complaints table (v2).
-
-    Changes from the old single-table design:
-      - attachments moved out of a JSON text column into their own table
-        (ComplaintAttachment) so a complaint can carry multiple files, each
-        with its own uploader/timestamp, and each can be deleted individually.
-      - a comment/reply thread (ComplaintComment) was added so staff (and
-        optionally the customer-facing side) can leave a running log of
-        updates on a complaint without overloading resolution_notes.
-      - SLA due-date tracking: sla_due_at is computed from priority at
-        creation time (and recomputed if priority changes while still open),
-        so overdue complaints can be queried/flagged.
-      - reopen_count tracks how many times a complaint has been reopened.
-
-    NOTE: this is a fresh table (no migration of old rows) - see the
-    accompanying migration note for dropping the old `complaints` table.
-    """
+    
     __tablename__ = 'complaints'
 
     SLA_HOURS = {'Urgent': 4, 'High': 24, 'Medium': 72, 'Low': 120}
+
+    # ---- Priority-based reminder escalation schedule (added) ----
+    # Each entry: (days_elapsed_threshold, notifications_per_day_from_then_on).
+    # The *highest* threshold the complaint has crossed (based on
+    # reminder_anchor_at, not created_at - see reset_reminder_clock) wins.
+    # e.g. Medium at day 2 -> 1/day, and once day 7 is reached -> 2/day.
+    REMINDER_SCHEDULE = {
+        'Low':    [(3, 1)],
+        'Medium': [(2, 1), (7, 2)],
+        'High':   [(1, 1), (5, 2)],
+        'Urgent': [(1, 3), (5, 4)],
+    }
 
     id = db.Column(db.Integer, primary_key=True)
     complaint_number = db.Column(db.String(20), unique=True, nullable=False)
@@ -852,12 +881,24 @@ class Complaint(db.Model):
 
     resolution_notes = db.Column(db.Text, nullable=True)
 
-    assigned_to = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    # CHANGED: a complaint can now have multiple assignees - see
+    # ComplaintAssignee below. The old single assigned_to FK column is gone;
+    # use .assignees / .assignee_ids / .is_assigned instead.
     resolved_at = db.Column(db.DateTime, nullable=True)
     closed_at = db.Column(db.DateTime, nullable=True)
 
     sla_due_at = db.Column(db.DateTime, nullable=True)
     reopen_count = db.Column(db.Integer, nullable=False, default=0)
+
+    # ---- Reminder-clock tracking (added) ----
+    # The point in time the escalation schedule counts "days elapsed" from.
+    # Set on creation; reset to "now" on reopen so a reopened complaint
+    # doesn't immediately jump to an escalated notify rate just because the
+    # elapsed time since the *original* creation is already large. Actual
+    # send throttling/spacing reuses notification_rules.can_send_today()
+    # against the Notification table (same mechanism every other periodic
+    # check in that file already uses) rather than duplicating counters here.
+    reminder_anchor_at = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -865,11 +906,24 @@ class Complaint(db.Model):
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
     customer = db.relationship('CustomerProject', backref=db.backref('complaints', cascade="all, delete-orphan", lazy=True))
-    assignee = db.relationship('User', foreign_keys=[assigned_to], backref='assigned_complaints')
     creator = db.relationship('User', foreign_keys=[created_by], backref='registered_complaints')
     modifier = db.relationship('User', foreign_keys=[updated_by], backref='modified_complaints')
 
     CLOSED_STATUSES = ('Resolved', 'Closed')
+
+    # ---- Multi-assignee helpers (added) ----
+    @property
+    def assignees(self):
+        """User objects currently assigned to this complaint."""
+        return [ca.user for ca in self.assignee_links if ca.user]
+
+    @property
+    def assignee_ids(self):
+        return [ca.user_id for ca in self.assignee_links]
+
+    @property
+    def is_assigned(self):
+        return len(self.assignee_links) > 0
 
     def compute_sla_due_at(self, from_time=None):
         """Recompute sla_due_at from the current priority. Call this on
@@ -878,6 +932,26 @@ class Complaint(db.Model):
         hours = self.SLA_HOURS.get(self.priority, self.SLA_HOURS['Medium'])
         self.sla_due_at = base + timedelta(hours=hours)
         return self.sla_due_at
+
+    def reset_reminder_clock(self, at=None):
+        """Restart the escalation countdown from scratch. Call on create and
+        on reopen (see notes on reminder_anchor_at above)."""
+        self.reminder_anchor_at = at or datetime.utcnow()
+
+    def current_reminder_rate(self, now=None):
+        """How many reminder notifications/day this complaint should be
+        getting right now, based on priority + days elapsed since
+        reminder_anchor_at. 0 means no reminders due yet (or complaint is
+        closed / has no anchor)."""
+        if self.status in self.CLOSED_STATUSES or not self.reminder_anchor_at:
+            return 0
+        now = now or datetime.utcnow()
+        elapsed_days = (now - self.reminder_anchor_at).days
+        rate = 0
+        for min_days, per_day in self.REMINDER_SCHEDULE.get(self.priority, []):
+            if elapsed_days >= min_days:
+                rate = per_day
+        return rate
 
     @property
     def is_overdue(self):
@@ -890,6 +964,7 @@ class Complaint(db.Model):
     def to_dict(self):
         attachments = sorted(self.attachments, key=lambda a: a.uploaded_at or datetime.min) if self.attachments else []
         comments = sorted(self.comments, key=lambda c: c.created_at or datetime.min) if self.comments else []
+        assignees = self.assignees
 
         return {
             "id": self.id,
@@ -909,8 +984,13 @@ class Complaint(db.Model):
             "comments": [c.to_dict() for c in comments],
             "comments_count": len(comments),
             "resolution_notes": self.resolution_notes,
-            "assigned_to": self.assigned_to,
-            "assigned_staff_name": self.assignee.full_name if self.assignee else None,
+            # CHANGED: multi-assignee. "assigned_to" is kept (first assignee,
+            # or None) only so any not-yet-updated frontend code doesn't
+            # crash; prefer "assignees" / "assignee_ids" going forward.
+            "assigned_to": assignees[0].id if assignees else None,
+            "assigned_staff_name": assignees[0].full_name if assignees else None,
+            "assignees": [{"id": u.id, "full_name": u.full_name} for u in assignees],
+            "assignee_ids": [u.id for u in assignees],
             "created_by": self.created_by,
             "created_by_name": self.creator.full_name if self.creator else None,
             "sla_due_at": self.sla_due_at.isoformat() if self.sla_due_at else None,
@@ -920,6 +1000,40 @@ class Complaint(db.Model):
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class ComplaintAssignee(db.Model):
+    """Join table for multi-staff assignment on a complaint (added).
+
+    Replaces the old single Complaint.assigned_to FK column. A unique
+    constraint on (complaint_id, user_id) stops the same staff member being
+    assigned twice to the same complaint.
+    """
+    __tablename__ = 'complaint_assignees'
+    __table_args__ = (
+        db.UniqueConstraint('complaint_id', 'user_id', name='uq_complaint_assignee'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    complaint_id = db.Column(db.Integer, db.ForeignKey('complaints.id', ondelete='CASCADE'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+
+    assigned_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    assigned_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    complaint = db.relationship('Complaint', backref=db.backref('assignee_links', cascade="all, delete-orphan", passive_deletes=True, lazy=True))
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('assigned_complaint_links', lazy=True))
+    assigner = db.relationship('User', foreign_keys=[assigned_by])
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "complaint_id": self.complaint_id,
+            "user_id": self.user_id,
+            "full_name": self.user.full_name if self.user else None,
+            "assigned_by": self.assigned_by,
+            "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
         }
 
 
@@ -1055,9 +1169,18 @@ class Notification(db.Model):
     title = db.Column(db.String(150), nullable=False)
     message = db.Column(db.Text, nullable=False)
     url = db.Column(db.String(255), nullable=True, default='/')
-    notif_type = db.Column(db.String(30), nullable=False, default='general')
+    notif_type = db.Column(db.String(250), nullable=False, default='general')
     is_read = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # ---- Popup queue tracking (added) ----
+    # popup_seen: user closed it themselves (X icon / OK button)
+    # popup_resolved: system auto-cleared it because the underlying work it
+    # was about is now complete (e.g. the delay it warned about got fixed),
+    # so it silently drops out of the queue without ever popping up.
+    # Kept separate from is_read - bell/read state is untouched either way.
+    popup_seen = db.Column(db.Boolean, default=False, nullable=False)
+    popup_resolved = db.Column(db.Boolean, default=False, nullable=False)
 
     # ---- Added: links a notification back to the customer it's about, so
     customer_project_id = db.Column(db.Integer, db.ForeignKey('customer_projects.id', ondelete='CASCADE'), nullable=True)
@@ -1079,6 +1202,28 @@ class Notification(db.Model):
             "url": self.url,
             "notif_type": self.notif_type,
             "is_read": self.is_read,
+            "popup_seen": self.popup_seen,
+            "popup_resolved": self.popup_resolved,
             "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
             "customer_project_id": self.customer_project_id
+        }
+
+class SupplementDocument(db.Model):
+    __tablename__ = 'supplement_documents'
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    file_url = db.Column(db.String(500), nullable=False)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.title, 
+            "description": self.description,
+            "url": self.file_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None
         }

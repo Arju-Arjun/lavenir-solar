@@ -433,7 +433,13 @@ const PaymentFlow = ({ customerId }) => {
           <div className="detail-data-grid">
             <div className="detail-item-node">
               <span className="node-label">Payment Method:</span>
-              <span className="node-value">{(paymentMethod === "Other" ? customMethod : paymentMethod) || "Not Specified"}</span>
+              {paymentMethod === "Other" && customMethod ? (
+                <span className="node-value">{customMethod}</span>
+              ) : paymentMethod ? (
+                <span className="node-value">{paymentMethod}</span>
+              ) : (
+                <span className="node-value" style={{ fontSize: "0.65rem", color: "#9ca3af" }}>Not Specified</span>
+              )}
             </div>
           </div>
           

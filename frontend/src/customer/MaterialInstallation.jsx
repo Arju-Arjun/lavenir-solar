@@ -374,23 +374,32 @@ const MaterialInstallation = ({ customerId }) => {
           <div className="detail-data-grid">
             <div className="detail-item-node">
               <span className="node-label">Electrical Installation:</span>
-              <span className={`node-value ${installationData?.electrical_installed ? "status-success" : "status-danger"}`}>
+              <span className={`status-badge-token-mnre ${installationData?.electrical_installed ? 'mnre-status-badge-completed' : 'mnre-status-badge-pending'}`}>
                 {installationData?.electrical_installed ? "Completed" : "Pending"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Structure Installation:</span>
-              <span className={`node-value ${installationData?.structure_installed ? "status-success" : "status-danger"}`}>
+              <span className={`status-badge-token-mnre ${installationData?.structure_installed ? 'mnre-status-badge-completed' : 'mnre-status-badge-pending'}`}>
                 {installationData?.structure_installed ? "Completed" : "Pending"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Installation Team:</span>
-              <span className="node-value">{installationData?.installation_team || "N/A"}</span>
+              {installationData?.installation_team ? (
+                <span className="node-value">{installationData.installation_team}</span>
+              ) : (
+                <span  style={{ fontSize: "0.65rem", color: "#9ca3af" }}>N/A</span>
+              )}
+             
             </div>
             <div className="detail-item-node">
               <span className="node-label">Completion Date:</span>
-              <span className="node-value">{installationData?.installation_completion_date ? installationData.installation_completion_date.substring(0, 10) : "N/A"}</span>
+               {installationData?.installation_completion_date ? (
+                <span className="node-value">{installationData.installation_completion_date.substring(0, 10)}</span>
+              ) : (
+                <span style={{ fontSize: "0.65rem", color: "#64748b" }}>dd-mm-yyyy</span>
+              )}
             </div>
           </div>
 

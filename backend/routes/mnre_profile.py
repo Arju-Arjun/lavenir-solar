@@ -1,17 +1,17 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, User, CustomerProject, MNREProfile, CustomerAuditLog, SiteVisit, PermissionRequest
+from sqlalchemy.exc import IntegrityError
 from utils import (
     check_permission, 
-    delete_cloudinary_file, 
+    delete_r2_file, 
+    upload_to_r2,
     handle_blueprint_check_access, 
     handle_blueprint_request_access,
     get_module_folder_path,
     sanitize_path_segment
 )
 from datetime import datetime
-import cloudinary
-import cloudinary.uploader
 import json
 
 mnre_bp = Blueprint('mnre_bp', __name__)
@@ -98,6 +98,19 @@ def save_mnre_profile(customer_id):
         if not profile:
             profile = MNREProfile(customer_project_id=cust.id, created_by=uid)
             db.session.add(profile)
+            try:
+                # Flush (not commit) so the unique constraint on
+                # customer_project_id is checked now. If a concurrent
+                # request already created this customer's MNRE profile
+                # between our lookup above and this INSERT, this raises
+                # IntegrityError instead of racing to create a second row.
+                db.session.flush()
+            except IntegrityError:
+                db.session.rollback()
+                profile = MNREProfile.query.filter_by(customer_project_id=cust.id).first()
+                action = "UPDATE"
+                if not profile:
+                    return jsonify({"error": "Could not save MNRE profile due to a conflicting update. Please try again."}), 409
 
         changes = {}
 
@@ -125,13 +138,13 @@ def save_mnre_profile(customer_id):
                 file_obj = request.files[field]
                 if file_obj and file_obj.filename != '':
                     old_file_url = getattr(profile, field)
-                    # public_id -> "{doctype}_{customer_id}" (Cloudinary appends the
-                    # extension automatically), giving lavenir/{customer}_{id}/mnre/{doctype}_{id}.{ext}
-                    public_id = f"{sanitize_path_segment(field)}_{sanitize_path_segment(cust.customer_id)}"
+                    ext = file_obj.filename.rsplit('.', 1)[-1] if '.' in file_obj.filename else 'bin'
+                    object_key = (
+                        f"{folder_path}/{sanitize_path_segment(field)}"
+                        f"_{sanitize_path_segment(cust.customer_id)}.{ext}"
+                    )
                     try:
-                        res = cloudinary.uploader.upload(
-                            file_obj, folder=folder_path, public_id=public_id, overwrite=True
-                        )
+                        new_file_url = upload_to_r2(file_obj, object_key, content_type=file_obj.mimetype)
                     except Exception:
                         db.session.rollback()
                         return jsonify({"error": f"Failed to upload {field}. Please try again."}), 502
@@ -139,12 +152,17 @@ def save_mnre_profile(customer_id):
                     # uploaded, and only if one actually existed — mirrors the
                     # safer pattern in bank_loan.py.
                     if old_file_url:
-                        delete_cloudinary_file(old_file_url, folder_path)
-                    changes[field] = {"old": old_file_url, "new": res['secure_url']}
-                    setattr(profile, field, res['secure_url'])
+                        delete_r2_file(old_file_url)
+                    changes[field] = {"old": old_file_url, "new": new_file_url}
+                    setattr(profile, field, new_file_url)
 
         profile.updated_by = uid
         profile.updated_at = datetime.utcnow()
+
+        old_work_done = profile.work_done
+        profile.work_done = "Completed" if profile.mnre_status == 'Completed' and profile.feasibility_file and profile.ack_file else "Pending"
+        if old_work_done != profile.work_done:
+            changes['work_done'] = {"old": old_work_done, "new": profile.work_done}
 
         if changes or action == "CREATE":
             log = CustomerAuditLog(
@@ -155,8 +173,7 @@ def save_mnre_profile(customer_id):
                 changes_payload=json.dumps(changes if changes else {"initialized": True})
             )
             db.session.add(log)
-            
-        profile.work_done = "Completed" if profile.mnre_status == 'Completed' and profile.feasibility_file and profile.ack_file else "Pending"
+
         db.session.commit()
         return jsonify({"message": "Operational parameters tracked successfully", "profile": profile.to_dict()}), 200
     except Exception as e:

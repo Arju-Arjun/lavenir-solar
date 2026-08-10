@@ -70,3 +70,49 @@ def mark_all_read():
     ).update({"is_read": True}, synchronize_session=False)
     db.session.commit()
     return jsonify({"success": True, "updated": updated})
+
+
+# ---------------------------------------------------------------------------
+# POPUP QUEUE (center-screen modal, separate from bell/is_read)
+# ---------------------------------------------------------------------------
+
+# Safety cap so one runaway notif_type can't hand the frontend an endless
+# queue - oldest-first (FIFO), same ordering the frontend should pop through.
+MAX_PENDING_POPUPS = 25
+
+
+@notifications_bp.route('/popups/pending', methods=['GET'])
+@jwt_required()
+def get_pending_popups():
+    """
+    Everything still owed to this user as a popup: not yet closed by them
+    (popup_seen) and not auto-cleared because the underlying work finished
+    (popup_resolved). Frontend calls this on login / on every page load and
+    shows them one at a time, oldest first.
+    """
+    user_id = int(get_jwt_identity())
+
+    pending = Notification.query.filter(
+        (Notification.user_id == user_id) | (Notification.user_id.is_(None)),
+        Notification.popup_seen == False,
+        Notification.popup_resolved == False
+    ).order_by(Notification.created_at.asc()).limit(MAX_PENDING_POPUPS).all()
+
+    return jsonify({"popups": [n.to_dict() for n in pending]})
+
+
+@notifications_bp.route('/<int:notif_id>/popup-seen', methods=['PUT'])
+@jwt_required()
+def mark_popup_seen(notif_id):
+    """Called when the user closes the popup via X or OK."""
+    user_id = int(get_jwt_identity())
+    notif = Notification.query.get_or_404(notif_id)
+
+    # Same ownership check as mark_read - broadcast rows (user_id is None)
+    # stay dismissable by anyone they're visible to.
+    if notif.user_id is not None and notif.user_id != user_id:
+        return jsonify({"error": "Not authorized to modify this notification"}), 403
+
+    notif.popup_seen = True
+    db.session.commit()
+    return jsonify({"success": True})

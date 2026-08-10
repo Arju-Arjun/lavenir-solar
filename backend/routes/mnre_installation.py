@@ -170,11 +170,14 @@ def save_mnre_installation(customer_id):
 
     installation.updated_by = uid
     installation.updated_at = datetime.utcnow()
+    old_work_done = installation.work_done
     installation.work_done = "Completed" if (
         installation.installation_status == 'Completed' and 
         installation.approval_status == 'Approved' and 
         installation.subsidy_status == 'Received'
     ) else "Pending"
+    if old_work_done != installation.work_done:
+        changes['work_done'] = {"old": old_work_done, "new": installation.work_done}
 
     try:
         if changes or action == "CREATE":

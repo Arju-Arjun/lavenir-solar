@@ -62,7 +62,7 @@ function PendingMetricCard({ data }) {
           <ChevronDown size={22} className={`pending-chevron ${open ? 'pending-chevron-open' : ''}`} />
         </div>
         <div className="metric-card-body">
-          <h3>Pending Items</h3>
+          <h3>Pending Modules</h3>
           <div className="metric-value">{data ? data.total_pending : '--'}</div>
           <p>Click to see breakdown by module</p>
         </div>
@@ -71,9 +71,14 @@ function PendingMetricCard({ data }) {
       {open && data && (
         <div className="pending-breakdown-list">
           {data.breakdown.map((row) => (
+                
             <div key={row.module} className="pending-breakdown-row">
-              <span>{row.module}</span>
-              <span className="pending-breakdown-count">{row.pending_count}</span>
+              {row.module !== 'Service' &&(
+                <>
+                  <span>{row.module}</span>
+                  <span className="pending-breakdown-count">{row.pending_count}</span>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -555,10 +560,10 @@ function AdminDashboard({ user, role, onLogout, currentPath, navigateTo, childre
     >
       {currentPath === '/' ? (
        <div className="dashboard-workspace-wrapper">
-        <header className="dashboard-view-header">
-          <h2>Admin Dashboard</h2>
+        {/* <header className="dashboard-view-header"> */}
+          <div className="profile-header-summary-card"><h2> Admin Dashboard</h2></div>
           <p className="welcome-back-text">Welcome back, {user?.full_name || 'Admin'}</p>
-        </header>
+        {/* </header> */}
           {error && <div className="table-error-fallback">Failed to load dashboard data: {error}</div>}
 
           <div className="dashboard-tabs">

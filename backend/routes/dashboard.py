@@ -82,16 +82,32 @@ MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
 CHART_START_YEAR = 2025
 
 def _pending_breakdown():
+    """
+    Pending = customers who don't yet have a "Completed" record for this
+    module. This intentionally counts customers with NO row at all for the
+    module (work not started) as pending, not just existing rows whose
+    work_done is 'Pending'/'Not Initiated' — otherwise a customer whose
+    SiteVisit/KSEB/etc. record hasn't been created yet would be silently
+    dropped from this count, which desyncs it from _module_work_stats()
+    and project_status() (both of which already do total - completed).
+    """
+    total_customers = db.session.query(func.count(CustomerProject.id)).scalar() or 0
+
     breakdown = []
     total_pending = 0
     for module_name, model in WORK_DONE_MODULES.items():
-        count = (db.session.query(func.count(model.id)).filter(model.work_done.in_(PENDING_VALUES)).scalar() or 0)
+        completed = (
+            db.session.query(func.count(func.distinct(model.customer_project_id)))
+            .filter(model.work_done == "Completed")
+            .scalar() or 0
+        )
+        count = max(total_customers - completed, 0)
         breakdown.append({"module": module_name, "pending_count": count})
         total_pending += count
 
     service_pending = (db.session.query(func.count(Service.id)).filter(Service.system_status.in_(SERVICE_PENDING_STATUSES)).scalar() or 0)
     breakdown.append({"module": "Service", "pending_count": service_pending})
-    total_pending += service_pending
+    # total_pending += service_pending
     return breakdown, total_pending
 
 def _available_years():
@@ -133,26 +149,7 @@ def _get_allowed_modules(current_user):
 
 
 def _module_work_stats(allowed_modules):
-    """
-    Pending/completed counts per allowed module, based on the TOTAL
-    customer count rather than only rows that already exist.
-
-    CHANGED: a brand-new customer profile with no module record at all used
-    to be invisible everywhere on the staff dashboard (it only showed up
-    once someone created a Site Visit/Payment/etc. row for it). Now every
-    customer counts as "Pending" for a module until that module has a
-    "Completed" record for them — so a customer created a second ago
-    immediately shows up as 1 pending in every module the staff member has
-    permission for, which is what the dashboard should reflect on day one.
-
-    completed = customers with at least one "Completed" record in that
-                module (counted once per customer, even if there happen to
-                be multiple rows).
-    pending   = every other customer (no record yet, or a record that
-                isn't Completed).
-    total     = total customer count (same for every module — it's not
-                "rows that exist", it's "customers who need this done").
-    """
+   
     total_customers = db.session.query(func.count(CustomerProject.id)).scalar() or 0
 
     stats = []
@@ -308,7 +305,7 @@ def _service_due_alerts():
             .scalar() or 0
         )
 
-        print(f"\n\nn\n\n\n\ number of maintenance services for project {project.customer_id}: {count}\n\n\n\n\n")
+       
 
 
         
@@ -356,9 +353,10 @@ def new_customers_per_month():
     rows = (
         db.session.query(
             extract("month", CustomerProject.created_date).label("month"),
-            func.count(CustomerProject.id).label("count"),
+            func.count(func.distinct(CustomerProject.id)).label("count"),
             func.coalesce(func.sum(SiteVisit.system_capacity), 0).label("capacity"),
         )
+        .outerjoin(SiteVisit, SiteVisit.customer_project_id == CustomerProject.id)
         .filter(extract("year", CustomerProject.created_date) == year)
         .group_by("month")
         .order_by("month")
@@ -368,9 +366,10 @@ def new_customers_per_month():
 
     totals_before_year = (
         db.session.query(
-            func.count(CustomerProject.id),
+            func.count(func.distinct(CustomerProject.id)),
             func.coalesce(func.sum(SiteVisit.system_capacity), 0),
         )
+        .outerjoin(SiteVisit, SiteVisit.customer_project_id == CustomerProject.id)
         .filter(extract("year", CustomerProject.created_date) < year)
         .one()
     )
@@ -420,9 +419,10 @@ def yearly_summary():
     rows = (
         db.session.query(
             extract("year", CustomerProject.created_date).label("year"),
-            func.count(CustomerProject.id).label("count"),
+            func.count(func.distinct(CustomerProject.id)).label("count"),
             func.coalesce(func.sum(SiteVisit.system_capacity), 0).label("capacity"),
         )
+        .outerjoin(SiteVisit, SiteVisit.customer_project_id == CustomerProject.id)
         .group_by("year")
         .all()
     )

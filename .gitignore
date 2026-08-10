@@ -18,3 +18,9 @@ frontend/dist/
 # OS generated files
 Thumbs.db
 .DS_Store
+lavenir-solar-backup.json
+
+lavenir-solar-backup.json
+oauth_client.json
+get_refresh_token.py
+seed.py

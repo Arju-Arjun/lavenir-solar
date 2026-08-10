@@ -1,9 +1,27 @@
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash
 from datetime import datetime
-from models import db, User 
+from models import db, User, UserPermission
+import json
 
 staff_bp = Blueprint('staff_bp', __name__)
+
+# Same module keys as PermissionManagement.jsx's `systemModules` (the admin
+# matrix UI) - kept in sync manually since the matrix is only defined there.
+# New staff get `view: True` on every module by default so a fresh account
+# can immediately see the modules (e.g. Site Visit) without waiting on an
+# admin to open Permission Management and grant it. update/delete stay
+# False - those are still admin-granted only.
+DEFAULT_PERMISSION_MODULES = [
+    'Customer Profile', 'Site Visit', 'Payment Flow', 'Bank Loan',
+    'MNRE Profile', 'KSEB Feasibility', 'Material Delivery',
+    'Material Installation', 'KSEB Registration & Completion',
+    'DCR Details', 'MNRE Installation', 'Service',
+]
+
+
+def _build_default_permissions_matrix():
+    return {mod: {"view": True, "update": False, "delete": False} for mod in DEFAULT_PERMISSION_MODULES}
 
 def generate_unique_employee_id():
     """
@@ -69,6 +87,13 @@ def add_new_staff():
         )
         
         db.session.add(new_staff)
+        db.session.flush()  # assign new_staff.id before creating the permission row that references it
+
+        db.session.add(UserPermission(
+            user_id=new_staff.id,
+            permissions_matrix=json.dumps(_build_default_permissions_matrix())
+        ))
+
         db.session.commit()
         
         return jsonify({

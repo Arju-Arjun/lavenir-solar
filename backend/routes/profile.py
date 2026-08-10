@@ -1,35 +1,32 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, User
-import re
-import cloudinary
-import cloudinary.uploader
+from utils import upload_to_r2, delete_r2_file, sanitize_path_segment
+import base64
+import io
+import time
 
 profile_bp = Blueprint('profile', __name__)
 
-MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB - keep well under Cloudinary's 10MB cap
-
-
-def delete_cloudinary_image(image_url):
-    if not image_url or "res.cloudinary.com" not in image_url or "sample.jpg" in image_url:
-        return
-    try:
-        pattern = r"/v\d+/(.+)\.[a-zA-Z0-9]+$"
-        match = re.search(pattern, image_url)
-        if match:
-            public_id = match.group(1)
-            cloudinary.uploader.destroy(public_id)
-            print(f"Successfully removed old Cloudinary asset: {public_id}")
-    except Exception as e:
-        print(f"Cloudinary file removal skipped or failed: {str(e)}")
+MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB - keep well under R2's per-request comfort zone
 
 
 def _get_file_size(file_storage):
     """Return size in bytes of a Werkzeug FileStorage without consuming the stream."""
     file_storage.seek(0, 2)  # seek to end
     size = file_storage.tell()
-    file_storage.seek(0)  # reset for later reads (e.g. cloudinary upload)
+    file_storage.seek(0)  # reset for later reads (e.g. R2 upload)
     return size
+
+
+def _profile_photo_key(user_id, ext):
+    """
+    Unlike Cloudinary's /v<timestamp>/ URLs, R2 public URLs don't
+    auto-version - reusing the same key on every update would let
+    browsers/CDNs keep serving the old cached image. A timestamp suffix
+    forces a fresh URL on every upload.
+    """
+    return f"solar_profiles/{sanitize_path_segment(str(user_id))}_{int(time.time())}.{ext}"
 
 
 @profile_bp.route('/me', methods=['GET'])
@@ -81,19 +78,23 @@ def update_profile():
                             "message": "Uploaded file must be an image."
                         }), 400
 
+                    ext = file_to_upload.filename.rsplit('.', 1)[-1] if '.' in file_to_upload.filename else 'jpg'
+                    object_key = _profile_photo_key(user.id, ext)
+
                     try:
-                        upload_result = cloudinary.uploader.upload(file_to_upload, folder="solar_profiles")
+                        new_url = upload_to_r2(file_to_upload, object_key, content_type=file_to_upload.mimetype)
                     except Exception as upload_err:
                         return jsonify({
                             "success": False,
                             "message": f"Profile photo upload failed: {str(upload_err)}"
                         }), 502
 
-                    # Delete the old profile photo from Cloudinary if it exists
-                    if user.profile_photo:
-                        delete_cloudinary_image(user.profile_photo)
-
-                    user.profile_photo = upload_result.get('secure_url')
+                    # Delete the old profile photo from R2 if it exists, only
+                    # after the new one is confirmed uploaded.
+                    old_photo = user.profile_photo
+                    user.profile_photo = new_url
+                    if old_photo:
+                        delete_r2_file(old_photo)
         else:
             # Fallback for JSON requests (e.g. text updates or direct image URLs)
             data = request.get_json() or {}
@@ -105,15 +106,47 @@ def update_profile():
             if 'profile_photo' in data and data['profile_photo'] != user.profile_photo:
                 profile_photo = data['profile_photo']
                 if profile_photo.startswith('http'):
-                    if user.profile_photo:
-                        delete_cloudinary_image(user.profile_photo)
+                    old_photo = user.profile_photo
                     user.profile_photo = profile_photo
+                    if old_photo:
+                        delete_r2_file(old_photo)
                 else:
-                    # Upload base64 or string data if passed through JSON
-                    upload_result = cloudinary.uploader.upload(profile_photo, folder="solar_profiles")
-                    if user.profile_photo:
-                        delete_cloudinary_image(user.profile_photo)
-                    user.profile_photo = upload_result.get('secure_url')
+                    # Upload base64 data passed through JSON (e.g. "data:image/png;base64,....")
+                    try:
+                        if ',' in profile_photo:
+                            header, b64data = profile_photo.split(',', 1)
+                        else:
+                            header, b64data = '', profile_photo
+                        mimetype = 'image/png'
+                        if 'image/' in header:
+                            mimetype = header.split(';')[0].replace('data:', '')
+                        ext = mimetype.split('/')[-1] or 'png'
+                        file_bytes = base64.b64decode(b64data)
+                    except Exception:
+                        return jsonify({
+                            "success": False,
+                            "message": "Invalid base64 image data."
+                        }), 400
+
+                    if len(file_bytes) > MAX_UPLOAD_SIZE:
+                        return jsonify({
+                            "success": False,
+                            "message": f"Profile photo is too large ({len(file_bytes) / 1024 / 1024:.1f}MB). Maximum is 5MB."
+                        }), 400
+
+                    object_key = _profile_photo_key(user.id, ext)
+                    try:
+                        new_url = upload_to_r2(io.BytesIO(file_bytes), object_key, content_type=mimetype)
+                    except Exception as upload_err:
+                        return jsonify({
+                            "success": False,
+                            "message": f"Profile photo upload failed: {str(upload_err)}"
+                        }), 502
+
+                    old_photo = user.profile_photo
+                    user.profile_photo = new_url
+                    if old_photo:
+                        delete_r2_file(old_photo)
 
         db.session.commit()
         return jsonify({

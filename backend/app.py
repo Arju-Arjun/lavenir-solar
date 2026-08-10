@@ -1,5 +1,5 @@
 import os
-import cloudinary
+import logging
 from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
@@ -32,9 +32,19 @@ from routes.profile import profile_bp
 from routes.workflow import workflow_bp
 from routes.complaints import complaints_bp
 from routes.reports import reports_bp
+from routes.backup import backup_bp
+from routes.supplements import supplements_bp
 from routes.scheduler import start_scheduler
 
 load_dotenv()
+
+# Without this, logger.info(...) calls (used on success by backup/runner.py
+# and elsewhere) print nothing by default - only logger.warning/error/
+# exception would surface. This makes success AND failure visible.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 app = Flask(__name__)
 
@@ -45,7 +55,7 @@ CORS(app, resources={
             "http://localhost:4173", "http://127.0.0.1:4173",
             "https://lavenir-solar-rho.vercel.app",
         ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # added PATCH
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True,
     }
@@ -63,12 +73,6 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "fallback_secret_key")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30)
 jwt = JWTManager(app)
-
-cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-)
 
 db.init_app(app)
 
@@ -105,7 +109,8 @@ app.register_blueprint(profile_bp, url_prefix='/api/profile')
 app.register_blueprint(workflow_bp, url_prefix='/api/workflow')
 app.register_blueprint(complaints_bp, url_prefix='/api/complaints')
 app.register_blueprint(reports_bp, url_prefix='/api/reports')
-
+app.register_blueprint(backup_bp, url_prefix='/api/backup')
+app.register_blueprint(supplements_bp, url_prefix='/api/supplements')
 
 @app.route('/')
 def health_check():

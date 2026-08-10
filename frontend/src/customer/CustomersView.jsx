@@ -134,7 +134,7 @@ export default function CustomersView() {
     <div className="customers-view-container">
       <div className="profile-header-summary-card">
         <div>
-          <h2>Customer Directory</h2>
+          <h2>📋 Customer Directory</h2>
           <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.875rem' }}>Track, audit, and dispatch system lifecycle deployment stages.</p>
         </div>
         <button className="edit-btn" onClick={() => setShowAddForm(true)}>➕ Add New Customer</button>

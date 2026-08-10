@@ -1,15 +1,17 @@
 import json
 import re
 import os
+import time
 import requests
-import cloudinary.uploader
+import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime, date
 from decimal import Decimal
 from sqlalchemy import inspect as sa_inspect
 from models import db, User, UserPermission, PermissionRequest, SiteVisit, KSEB
 from flask import jsonify
-
 from google import genai
+from google.genai import errors as genai_errors
 
 
 def send_reset_email(to_email, reset_link):
@@ -51,15 +53,211 @@ def send_reset_email(to_email, reset_link):
     response.raise_for_status()
 
 
-def delete_cloudinary_file(file_url, folder_path):
-    if file_url and "res.cloudinary.com" in file_url:
-        try:
-            public_id = file_url.split('/')[-1].split('.')[0]
-            cloudinary.uploader.destroy(f"{folder_path}/{public_id}")
-            return True
-        except Exception as e:
-            print(f"Cloudinary asset cleanup fault for {file_url}: {str(e)}")
-    return False
+def send_failure_alert(subject, error_detail, context=None):
+    """
+    Sends an emergency alert email to EMERGENCY_MAIL whenever a background
+    job (scheduled backup, manual backup trigger, notification check, etc.)
+    fails. Call this from inside an `except` block with the exception's
+    string representation (or traceback.format_exc()) as error_detail.
+
+    This is best-effort and defensive on purpose: if EMERGENCY_MAIL/
+    BREVO_API_KEY/MAIL_FROM aren't configured, or the alert email itself
+    fails to send, that's only logged - it never raises, so a notification
+    problem can't mask or replace the original failure that triggered it.
+    """
+    to_email = os.getenv('EMERGENCY_MAIL')
+    api_key = os.getenv('BREVO_API_KEY')
+    from_email = os.getenv('MAIL_FROM')
+
+    if not to_email or not api_key or not from_email:
+        print(f"send_failure_alert skipped (EMERGENCY_MAIL/BREVO_API_KEY/MAIL_FROM not set) - {subject}: {error_detail}")
+        return
+
+    text_content = f"{subject}\n\n{error_detail}"
+    if context:
+        text_content += f"\n\nContext:\n{context}"
+
+    try:
+        response = requests.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={
+                "sender": {"email": from_email, "name": "Lavenir Solar Alerts"},
+                "to": [{"email": to_email}],
+                "subject": f"[Lavenir Solar ALERT] {subject}",
+                "textContent": text_content,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception as e:
+        # Swallow on purpose - see docstring. Just log so it's visible in
+        # server logs even though the admin didn't get the email.
+        print(f"send_failure_alert: failed to send alert email for '{subject}': {str(e)}")
+
+
+def send_keepalive_email():
+    """
+    Sends a harmless, auto-generated email via the Brevo transactional API
+    purely to register as account "activity". Brevo auto-deletes accounts
+    (Free plan: after 4 months idle; any plan per the general ToS: after 6
+    months with no login/action) unless something happens on the account in
+    between. Call this on a schedule well under that window (see
+    KEEPALIVE_INTERVAL_DAYS in scheduler.py, default every 90 days) so the
+    account never crosses the inactivity threshold.
+
+    Sends to KEEPALIVE_MAIL if set, else falls back to EMERGENCY_MAIL, else
+    MAIL_FROM (i.e. mails itself) - so no extra env var is strictly required
+    beyond what send_failure_alert already needs.
+
+    Best-effort/defensive like send_failure_alert: missing config or a
+    delivery failure is only logged, never raised, so it can't take down
+    the scheduler.
+    """
+    api_key = os.getenv('BREVO_API_KEY')
+    from_email = os.getenv('MAIL_FROM')
+    to_email = os.getenv('KEEPALIVE_MAIL') or os.getenv('EMERGENCY_MAIL') or from_email
+
+    if not to_email or not api_key or not from_email:
+        print(f"send_keepalive_email skipped (BREVO_API_KEY/MAIL_FROM/KEEPALIVE_MAIL not set)")
+        return
+
+    try:
+        response = requests.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={
+                "sender": {"email": from_email, "name": "Lavenir Solar"},
+                "to": [{"email": to_email}],
+                "subject": "Lavenir Solar - scheduled keepalive email",
+                "textContent": (
+                    "This is an automated keepalive email sent on a schedule "
+                    "purely to keep the Brevo account active. No action is "
+                    f"needed. Sent at {datetime.utcnow().isoformat()} UTC."
+                ),
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception as e:
+        # Swallow on purpose - see docstring.
+        print(f"send_keepalive_email: failed to send keepalive email: {str(e)}")
+
+
+_R2_CLIENT = None
+
+
+def _get_r2_client():
+    """Lazily-built S3-compatible client pointed at the R2 bucket."""
+    global _R2_CLIENT
+    if _R2_CLIENT is None:
+        _R2_CLIENT = boto3.client(
+            's3',
+            endpoint_url=os.getenv('R2_ENDPOINT_URL'),
+            aws_access_key_id=os.getenv('R2_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('R2_SECRET_ACCESS_KEY'),
+            region_name='auto',
+        )
+    return _R2_CLIENT
+
+
+def get_r2_client():
+    """
+    Public accessor for the lazily-built R2 client, so other modules
+    (e.g. backup/r2_backup.py, backup/recycle_bin.py) can reuse the same
+    client instead of building their own boto3 client with duplicated
+    env-var wiring.
+    """
+    return _get_r2_client()
+
+
+def get_r2_public_url(object_key):
+    """Builds the public URL for an object key, given R2_PUBLIC_URL in .env."""
+    base = os.getenv('R2_PUBLIC_URL', '').rstrip('/')
+    return f"{base}/{object_key}"
+
+
+def upload_to_r2(file_obj, object_key, content_type=None):
+    """
+    Uploads a file-like object (e.g. Flask's request.files['x']) to R2 under
+    object_key (e.g. build_doc_path(...) below) and returns its public URL.
+    """
+    bucket = os.getenv('R2_BUCKET_NAME')
+    extra_args = {'ContentType': content_type} if content_type else {}
+    try:
+        _get_r2_client().upload_fileobj(file_obj, bucket, object_key, ExtraArgs=extra_args)
+        return get_r2_public_url(object_key)
+    except ClientError as e:
+        print(f"R2 upload fault for {object_key}: {str(e)}")
+        raise
+
+
+def _r2_key_from_url(file_url_or_key):
+    """Strips the R2_PUBLIC_URL prefix (if present) to resolve a bare object key."""
+    base = os.getenv('R2_PUBLIC_URL', '').rstrip('/')
+    if base and file_url_or_key.startswith(base):
+        return file_url_or_key[len(base):].lstrip('/')
+    return file_url_or_key
+
+
+def delete_r2_file(file_url_or_key):
+    """
+    Deletes an object from R2. Accepts either a full public URL (as stored
+    on the model - the R2_PUBLIC_URL prefix is stripped to get the key) or
+    a bare object key.
+    """
+    if not file_url_or_key:
+        return False
+    object_key = _r2_key_from_url(file_url_or_key)
+    bucket = os.getenv('R2_BUCKET_NAME')
+    try:
+        _get_r2_client().delete_object(Bucket=bucket, Key=object_key)
+        return True
+    except ClientError as e:
+        print(f"R2 asset cleanup fault for {object_key}: {str(e)}")
+        return False
+
+
+TRASH_PREFIX = "lavenir/trash"
+
+
+def move_r2_to_trash(file_url_or_key):
+    """
+    Moves a single R2 object into TRASH_PREFIX instead of deleting it,
+    preserving its original path underneath, e.g.:
+        lavenir/JohnDoe_1023/sitevisit/adhar_1023.jpg
+        -> lavenir/trash/JohnDoe_1023/sitevisit/adhar_1023.jpg
+
+    R2/S3 has no native "rename" - this is emulated as copy-then-delete-
+    original, which is what Cloudinary's uploader.rename() effectively did
+    under the hood anyway. Returns the new public URL on success, or None
+    if nothing was moved (e.g. already in trash, or on failure).
+    """
+    if not file_url_or_key:
+        return None
+    object_key = _r2_key_from_url(file_url_or_key)
+    if object_key.startswith(TRASH_PREFIX + "/"):
+        return None  # already sitting in trash
+
+    new_key = f"{TRASH_PREFIX}/{object_key}"
+    bucket = os.getenv('R2_BUCKET_NAME')
+    try:
+        client = _get_r2_client()
+        client.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': object_key}, Key=new_key)
+        client.delete_object(Bucket=bucket, Key=object_key)
+        print(f"Moved R2 object to trash: {object_key} -> {new_key}")
+        return get_r2_public_url(new_key)
+    except ClientError as e:
+        print(f"R2 trash-move skipped or failed for {object_key}: {str(e)}")
+        return None
 
 
 def is_admin_user(user_id):
@@ -323,19 +521,19 @@ def serialize_model(instance):
 # GEMINI-POWERED REPORT GENERATION
 # ---------------------------------------------------------------------------
 
-_GEMINI_CONFIGURED = False
+_GEMINI_CLIENT = None
 
 
-def _ensure_gemini_configured():
-    global _GEMINI_CONFIGURED
-    if not _GEMINI_CONFIGURED:
+def _get_gemini_client():
+    global _GEMINI_CLIENT
+    if _GEMINI_CLIENT is None:
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY is not set in the environment. Add it to your .env file."
             )
-        genai.configure(api_key=api_key)
-        _GEMINI_CONFIGURED = True
+        _GEMINI_CLIENT = genai.Client(api_key=api_key)
+    return _GEMINI_CLIENT
 
 
 def _json_default(value):
@@ -370,24 +568,86 @@ def _resolve_language_instruction(language):
     key = (language or 'english').strip().lower()
     return LANGUAGE_INSTRUCTIONS.get(key, LANGUAGE_INSTRUCTIONS['english'])
 
-
 def _build_customer_report_prompt(data, language='english'):
     return f"""You are writing an internal project-status report for a solar
-installation company, for staff/management use. Using the JSON data below
-(covering all workflow modules for one customer), write a clear, well
-organized report in plain text (no markdown symbols like ** or ##) covering:
+installation company. The reader is a super admin who oversees every
+customer and every staff member - they need to understand this project's
+health in the first few seconds, then drill into details if they choose to.
 
-1. Customer overview (name, ID, district, place, capacity, overall project status)
-2. Progress across each module: Site Visit, MNRE Profile, Payment Flow,
-   Bank Loan, KSEB Feasibility, Material Delivery, Material Installation,
-   KSEB Registration & Completion, DCR, MNRE Installation, Service & Maintenance
-   - for each, state whether it's Completed or Pending and mention any
-     notable details (amounts, dates, comments) from the data
-3. Any risks, delays, or missing information you notice
-4. A short overall summary / next steps
+FORMATTING RULES (follow strictly):
+- Plain text only. No markdown symbols like **, ##, *, -.
+- Never start a line with a number followed by a period or bracket (no
+  "1.", "1)", "2.", etc.) anywhere in the report, including in the module
+  list and the next-steps list. Write module names and steps as plain
+  lines or short paragraphs instead, without any numbering.
+- Keep sentences short. Keep paragraphs to 2-3 sentences max.
+- Leave one blank line between every section and between the section
+  heading and its content, so the report is easy to scan, not one dense
+  block of text.
+- Section headings should be short, in plain capital letters, on their
+  own line (e.g. EXECUTIVE SUMMARY), with a blank line before and after.
 
-Only use facts present in the data below - do not invent figures or dates.
-If a module's data is null, say it hasn't been started yet.
+CRITICAL - WRITE IN PLAIN HUMAN LANGUAGE, NEVER DUMP RAW DATA:
+- Never print a JSON/database field name in the report (e.g. never write
+  "work_done", "advance_amount", "mnre_status", "is_overdue",
+  "reopen_count", or any other snake_case key, and never write
+  "field_name: value" pairs).
+- Translate every fact into a natural sentence instead. For example,
+  instead of "advance_amount: 0.0, total_amount: 0.0" write "no advance
+  payment has been received yet". Instead of "work_done: Pending" write
+  "this module is still pending". Instead of "is_overdue: true" write
+  "this complaint has crossed its due date".
+- Only mention a number, amount, or date when it is meaningful to a
+  reader (e.g. an actual payment amount, a real date) - do not restate
+  every zero/false/null field individually. If most fields in a module
+  are empty or zero, just say the module hasn't been started or has no
+  meaningful progress yet, in one line - do not list each empty field.
+
+Structure the report in this exact order:
+
+EXECUTIVE SUMMARY (4-6 short lines)
+Customer name, ID, district, place, capacity (kW). Overall project status
+in one line (e.g. "On track", "Delayed", "Stalled - awaiting customer
+action", "Nearing completion"). How many of the 11 modules are complete
+versus pending, in plain words. The single biggest risk or blocker right
+now, or say there are none.
+
+MODULE-BY-MODULE STATUS
+Cover each of the 11 modules in this fixed order, each as its own short
+paragraph (module name as a plain line, no numbering): Site Visit, MNRE
+Profile, Payment Flow, Bank Loan, KSEB Feasibility, Material Delivery,
+Material Installation, KSEB Registration & Completion, DCR, MNRE
+Installation, Service & Maintenance.
+Use each module's completion signal in the data as the authoritative
+source for whether it's complete or pending, but describe it in plain
+words ("this module is complete", "still pending"), never by naming the
+field. Mention one or two genuinely notable details per module in plain
+language (an amount, a date, a comment) only if present and meaningful.
+If a module's data is null, say it hasn't been started yet - do not
+guess why, and do not list every missing sub-field.
+For Bank Loan specifically: if the data shows the customer did not need
+a loan, say plainly that no loan was required - do not describe this as
+a completed loan process, since those are different things.
+
+COMPLAINTS
+Summarize the complaints for this customer in plain language: how many
+total, how many are open versus resolved versus closed, and mention if
+any have crossed their due date or were reopened - describe this in
+words, not field names. If there are no complaints, say so in one line.
+
+RISKS & GAPS
+Call out anything overdue, inconsistent, or missing that a super admin
+should know about even if no one flagged it, in plain sentences. Base
+this only on the data, including the audit log if it shows unusual gaps
+in activity.
+
+RECOMMENDED NEXT STEPS
+Write 2-4 concrete, prioritized actions as plain lines (no numbering) -
+what should happen next and who this likely depends on (customer, staff,
+KSEB, MNRE, etc.), based only on what the data shows.
+
+Only use facts present in the data below - never invent figures, dates, or
+reasons for delay that aren't supported by the data.
 
 LANGUAGE INSTRUCTION: {_resolve_language_instruction(language)}
 (Keep numbers, dates, module names, and proper nouns as-is; apply the
@@ -400,19 +660,58 @@ DATA:
 
 def _build_staff_report_prompt(data, language='english'):
     return f"""You are writing an internal staff performance report for a
-solar installation company, for management use. Using the JSON data below
-(covering one staff member's logged activity, site visits, and complaint
-handling over a specific date range), write a clear, well organized report
-in plain text (no markdown symbols like ** or ##) covering:
+solar installation company. The reader is a super admin reviewing many
+staff members - they need a clear verdict on this person's performance in
+the reporting period, then supporting detail.
 
-1. Staff overview (name, role, department, the reporting period covered)
-2. Volume and nature of activity logged during the period (from activity_log)
-3. Site visits handled
-4. Complaints assigned vs resolved during the period, and how promptly
-5. An overall performance summary and any observations worth flagging to management
+FORMATTING RULES (follow strictly):
+- Plain text only. No markdown symbols like **, ##, *, -.
+- Never start a line with a number followed by a period or bracket (no
+  "1.", "1)", "2.", etc.) anywhere in the report. Write observations and
+  next steps as plain lines or short paragraphs, without any numbering.
+- Keep sentences short. Keep paragraphs to 2-3 sentences max.
+- Leave one blank line between every section and between the section
+  heading and its content, so the report is easy to scan, not one dense
+  block of text.
+- Section headings should be short, in plain capital letters, on their
+  own line (e.g. EXECUTIVE SUMMARY), with a blank line before and after.
 
-Only use facts present in the data below - do not invent figures or dates.
-If a section has no data, say no activity was recorded for that period.
+CRITICAL - WRITE IN PLAIN HUMAN LANGUAGE, NEVER DUMP RAW DATA:
+- Never print a JSON/database field name in the report (e.g. never write
+  "resolved_at", "is_overdue", "reopen_count", or any other snake_case
+  key, and never write "field_name: value" pairs).
+- Translate every fact into a natural sentence instead. Only mention a
+  specific number or date when it's meaningful to the reader (e.g. "5
+  site visits were completed") - do not restate raw data field by field.
+
+Structure the report in this exact order:
+
+EXECUTIVE SUMMARY (4-6 short lines)
+Staff name, role, department, and the exact reporting period covered.
+One-line performance verdict (e.g. "Strong, consistent activity",
+"Below-average output this period", "Mostly reactive - low proactive
+activity", "Insufficient data to assess"). Headline numbers in plain
+words: total activity logged, site visits handled, complaints assigned
+versus resolved.
+
+ACTIVITY DURING THE PERIOD
+Volume and nature of activity logged, and site visits handled - what was
+done, and any patterns worth noting (bursts of activity, gaps, etc.),
+described in plain language.
+
+COMPLAINT HANDLING
+Complaints assigned versus resolved during the period, and how promptly,
+in plain language - flag anything left unresolved or resolved slowly.
+
+OBSERVATIONS FOR MANAGEMENT
+Write 2-4 specific, evidence-based observations or recommendations as
+plain lines (no numbering) that a super admin should act on or keep an
+eye on. Do not speculate about the person's motivation or effort - only
+describe what the data shows.
+
+Only use facts present in the data below - never invent figures or dates.
+If a section has no data, say plainly that no activity was recorded for
+that period, rather than guessing why.
 
 LANGUAGE INSTRUCTION: {_resolve_language_instruction(language)}
 (Keep numbers, dates, module names, and proper nouns as-is; apply the
@@ -422,14 +721,14 @@ DATA:
 {json.dumps(data, indent=2, default=_json_default)}
 """
 
-
-def generate_gemini_report(data, report_type, language='english', model_name='gemini-3.6-flash'):
+def generate_gemini_report(data, report_type, language='english', model_name='gemini-3.6-flash',
+                            max_retries=3):
     """
     report_type: 'customer' or 'staff'.
     language: 'english' | 'malayalam' | 'hindi' | 'manglish'.
     Returns the report as plain text.
     """
-    _ensure_gemini_configured()
+    client = _get_gemini_client()
 
     if report_type == 'customer':
         prompt = _build_customer_report_prompt(data, language=language)
@@ -438,6 +737,18 @@ def generate_gemini_report(data, report_type, language='english', model_name='ge
     else:
         raise ValueError(f"Unknown report_type: {report_type}")
 
-    model = genai.GenerativeModel(model_name)
-    response = model.generate_content(prompt)
-    return response.text
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(model=model_name, contents=prompt)
+            return response.text
+        except genai_errors.ServerError as e:
+            # 503 UNAVAILABLE / occasional 429s are transient overload - back off and retry.
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # 1s, 2s, 4s
+            continue
+
+    raise RuntimeError(
+        "Gemini is currently experiencing high demand. Please try generating the report again in a minute."
+    ) from last_error

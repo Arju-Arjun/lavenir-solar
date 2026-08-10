@@ -94,10 +94,11 @@ function DocumentsView() {
 
   return (
     <div className="customers-view-container">
-      <div className="dashboard-view-header">
-        <h2>Customer Document Vault</h2>
+      {/* <div className="dashboard-view-header"> */}
+        <div className="profile-header-summary-card"><h2>📋 Customer Documents</h2>
+        </div>
         <p className="welcome-back-text">Browse and download module-wise files, photos, and scanned records.</p>
-      </div>
+      
 
       <div className="document-vault-grid">
         

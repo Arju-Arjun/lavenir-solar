@@ -53,6 +53,11 @@ export default function AddCustomer({ onCancel, onSuccess }) {
     // Field Validation Guardrail
     if (!formData.customer_name || !formData.phone_number || !formData.district) {
       alert('Required parameters missing! Name, Phone, District, and Place must be populated.');
+    } else if (formData.phone_number.length !== 10 || !/^\d+$/.test(formData.phone_number)) {
+      alert('Phone number must be exactly 10 digits and numeric only.');
+    }
+    else if (formData.capacity_kw && parseFloat(formData.capacity_kw) <= 1) {
+      alert('Capacity (kW) minimum 1kw.');
       return;
     }
 
@@ -223,12 +228,14 @@ export default function AddCustomer({ onCancel, onSuccess }) {
               <label style={{ fontSize: '0.875rem', fontWeight: '6px', color: '#334155' }}>Capacity (kW)</label>
               <input 
                 type="number" 
-                step="0.01"
+                step="0.5"
                 min="0"
                 name="capacity_kw" 
                 className="form-field-input"
                 // value={formData.capacity_kw} 
                 onChange={handleInputChange}
+                
+                required
               />
             </div>
 

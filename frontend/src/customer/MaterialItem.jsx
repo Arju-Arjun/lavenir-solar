@@ -1,8 +1,19 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
+import { FaEdit, FaPlus, FaTrash, FaDownload } from "react-icons/fa";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import ConfirmationModal from "../components/ConfirmationModal"; // Adjust path if needed
 
 const API_BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/api`;
+
+// Shown as the header title on the downloaded PDF — replace with the real
+// company name.
+const COMPANY_NAME = "Lavenir Solar";
+
+// Watermark logo for the downloaded PDF - already pre-made transparent, so
+// it's drawn as-is (no extra opacity applied). Served from Vite's public
+// folder at this path (public/assets/transparent.png -> /assets/transparent.png).
+const WATERMARK_LOGO_PATH = "/assets/transparent.png";
 
 const UNIT_OPTIONS = ["Nos.", "Mtr", "Meter", "Kg", "Litter", "Bag", "Set", "Roll"];
 
@@ -12,6 +23,13 @@ const CATEGORY_FILTER_OPTIONS = ["All", "Electrical", "Structural"];
 // Per-item category assignment: an item itself can only ever be one or the
 // other, never "Both".
 const ITEM_CATEGORY_OPTIONS = ["Electrical", "Structural"];
+
+// Special category for rows added from the Usage/Installation tab that
+// aren't part of the original delivered inventory (e.g. something bought
+// extra in the field). Kept out of the main table + category filter, and
+// shown instead in its own fully-editable "Extra Items" table, usage mode
+// only.
+const EXTRA_ITEM_CATEGORY = "Extra Items";
 
 const SORT_OPTIONS = ["Default", "Quantity: High to Low", "Quantity: Low to High"];
 
@@ -79,7 +97,25 @@ const apiFetch = (path, { signal, ...options } = {}) =>
     }
   });
 
-const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
+// Loads the watermark logo once per download and returns it as a data URL
+// (jsPDF's addImage needs base64/data-URL, not a plain <img> src path),
+// plus its natural aspect ratio so it can be centered on the page without
+// stretching.
+const loadWatermarkLogo = () =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      resolve({ dataUrl: canvas.toDataURL("image/png"), aspect: img.naturalWidth / img.naturalHeight });
+    };
+    img.onerror = reject;
+    img.src = WATERMARK_LOGO_PATH;
+  });
+
+const MaterialItem = ({ customerId, canUpdate, mode = "delivery", customerName }) => {
   // mode can be "delivery" (adds/edits items) OR "usage" (updates used/remaining qty)
 
   const [itemsList, setItemsList] = useState([]);
@@ -87,6 +123,30 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Fallback name fetch: if a parent up the chain forgot to pass
+  // customerName down as a prop, fetch it directly so the PDF header never
+  // shows a blank/"N/A" name. Prefers the prop when it's actually given.
+  const [fetchedCustomerName, setFetchedCustomerName] = useState("");
+  const resolvedCustomerName = customerName || fetchedCustomerName;
+
+  useEffect(() => {
+    if (customerName || !customerId) return; // prop already provided, skip fetch
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch(`/customers/${customerId}`);
+        if (res.ok) {
+          const data = await res.json();
+          const name = data?.data?.customer_name || data?.customer_name;
+          if (!cancelled && name) setFetchedCustomerName(name);
+        }
+      } catch (err) {
+        console.error("Failed to fetch customer name fallback:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [customerId, customerName]);
 
   // Ref to keep track of input elements for auto-scrolling and focus
   const inputRefs = useRef([]);
@@ -104,25 +164,32 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
     onConfirm: () => {}
   });
 
+  // Raw fetch helper that returns the items array directly instead of only
+  // writing to state — needed so executeSave() can read freshly-created
+  // Extra Items rows (with their real DB ids) synchronously mid-save.
+  const fetchItemsRaw = useCallback(async (signal) => {
+    const res = await apiFetch(`/material_item/${customerId}/items/`, { signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.items || [];
+  }, [customerId]);
+
   // Guards against a stale response overwriting fresher state if customerId
   // changes quickly (or the component unmounts) while a fetch is in flight.
   const fetchItems = useCallback(async (signal) => {
     setLoading(true);
     try {
-      const res = await apiFetch(`/material_item/${customerId}/items/`, { signal });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.items && data.items.length > 0) {
-          setItemsList(data.items);
-          setOriginalItems(data.items);
-        } else if (mode === "delivery") {
-          // Load default basic items only in delivery mode if empty
-          setItemsList(defaultSolarItems);
-          setOriginalItems(defaultSolarItems);
-        } else {
-          setItemsList([]);
-          setOriginalItems([]);
-        }
+      const items = await fetchItemsRaw(signal);
+      if (items.length > 0) {
+        setItemsList(items);
+        setOriginalItems(items);
+      } else if (mode === "delivery") {
+        // Load default basic items only in delivery mode if empty
+        setItemsList(defaultSolarItems);
+        setOriginalItems(defaultSolarItems);
+      } else {
+        setItemsList([]);
+        setOriginalItems([]);
       }
     } catch (err) {
       if (err.name !== "AbortError") {
@@ -131,7 +198,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [customerId, mode]);
+  }, [fetchItemsRaw, mode]);
 
   useEffect(() => {
     if (!customerId) return;
@@ -140,7 +207,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
     return () => controller.abort();
   }, [customerId, fetchItems]);
 
-  // --- DELIVERY MODE HANDLERS ---
+  // --- DELIVERY MODE HANDLERS (also reused for Extra Items rows) ---
   const handleDeliveryChange = (index, field, value) => {
     setItemsList((prev) => {
       const next = [...prev];
@@ -153,7 +220,11 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
     setItemsList((prev) => {
       const updated = [
         ...prev,
-        { material_name: "", quantity: 0, unit: "Nos.", category: "Electrical" }
+        mode === "usage"
+          // Rows added from the Usage/Installation tab are tagged as Extra
+          // Items so they render in their own table, never the main one.
+          ? { material_name: "", quantity: 0, unit: "Nos.", category: EXTRA_ITEM_CATEGORY, used_quantity: 0, remaining_quantity: 0 }
+          : { material_name: "", quantity: 0, unit: "Nos.", category: "Electrical" }
       ];
       return updated;
     });
@@ -188,6 +259,7 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
   };
 
   // --- USAGE/INSTALLATION MODE HANDLERS (Bilateral Auto-Calculate) ---
+  // Also reused for Extra Items rows' Used/Remain fields.
   const handleUsageChange = (index, field, rawValue) => {
     // Allow clearing the field while typing instead of snapping to 0.
     if (rawValue === "") {
@@ -271,8 +343,57 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
         if (!res.ok) throw new Error("Failed to save delivery items. Ensure General Delivery is created first.");
 
       } else if (mode === "usage") {
+        const hasExtraChanges =
+          cleanedItems.some((i) => i.category === EXTRA_ITEM_CATEGORY) ||
+          originalItems.some(
+            (i) => i.category === EXTRA_ITEM_CATEGORY && !cleanedItems.find((c) => c.id === i.id)
+          );
+
+        // Items we'll run the usage (used_quantity) PATCH against below.
+        // Starts as the items the user edited; may get swapped out for
+        // freshly-fetched rows (with real ids) after the Extra Items save.
+        let workingItems = cleanedItems;
+
+        if (hasExtraChanges) {
+          // Step 1: persist Extra Items rows (name/unit/quantity/category)
+          // through the same items-array endpoint the Delivery tab uses —
+          // it already handles create/update/delete of item rows by id.
+          // We must send the FULL item list (not just extras), since this
+          // endpoint deletes any row whose id isn't present in the payload.
+          const fullPayload = cleanedItems.map((item, index) => ({
+            ...item,
+            sl_no: item.sl_no ?? index + 1
+          }));
+          const payload = new FormData();
+          payload.append("items", JSON.stringify(fullPayload));
+
+          const res = await apiFetch(`/material/${customerId}/`, {
+            method: "PUT",
+            body: payload
+          });
+          if (!res.ok) throw new Error("Failed to save Extra Items. Ensure General Delivery is created first.");
+
+          // Step 2: re-fetch so newly-added Extra Items rows get their real
+          // DB ids — required before we can PATCH their used_quantity.
+          const freshItems = await fetchItemsRaw();
+          workingItems = freshItems.map((freshItem) => {
+            // Carry over the used_quantity the user just typed for Extra
+            // Items rows, matched by name+category since new rows don't
+            // have a stable id until after this refetch.
+            const typed = cleanedItems.find(
+              (c) =>
+                c.id === freshItem.id ||
+                (c.category === EXTRA_ITEM_CATEGORY &&
+                  freshItem.category === EXTRA_ITEM_CATEGORY &&
+                  (c.material_name || "").trim().toLowerCase() ===
+                    (freshItem.material_name || "").trim().toLowerCase())
+            );
+            return typed ? { ...freshItem, used_quantity: typed.used_quantity } : freshItem;
+          });
+        }
+
         // Only items with an id and a delivered quantity > 0 are eligible.
-        const validItemsToUpdate = cleanedItems.filter(
+        const validItemsToUpdate = workingItems.filter(
           (item) => item.id && parseFloat(item.quantity) > 0
         );
 
@@ -316,12 +437,90 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
     setIsEditing(false);
   };
 
+  // Builds a PDF of Sl / Material Name / Category / Unit / Total Qty for
+  // every item with a delivered quantity greater than 0. Header shows the
+  // company name, a section title, and the customer + download date.
+  const handleDownloadPdf = async () => {
+    const rows = itemsList
+      .filter((item) => (parseFloat(item.quantity) || 0) > 0)
+      .map((item, i) => [
+        i + 1,
+        item.material_name || "Unnamed",
+        item.category || "Electrical",
+        item.unit || "",
+        item.quantity
+      ]);
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+
+    // Measure each part so the combined two-tone title is truly centered on
+    // the page, the same way "Material Items" below it is centered.
+    const partOne = "Lavenir ";
+    const partTwo = "Solar";
+    const partOneWidth = doc.getStringUnitWidth(partOne) * doc.getFontSize() / doc.internal.scaleFactor;
+    const partTwoWidth = doc.getStringUnitWidth(partTwo) * doc.getFontSize() / doc.internal.scaleFactor;
+    const titleStartX = (pageWidth - (partOneWidth + partTwoWidth)) / 2;
+
+    doc.setTextColor(4, 44, 83);
+    doc.text(partOne, titleStartX, 15, { align: "left" });
+
+    doc.setTextColor(186, 117, 23);
+    doc.text(partTwo, titleStartX + partOneWidth, 15, { align: "left" });
+
+    doc.setFontSize(12);
+    doc.setFont(undefined, "normal");
+    doc.text("Material Items", pageWidth / 2, 22, { align: "center" });
+
+    doc.setFontSize(10);
+    doc.text(`Customer Name: ${resolvedCustomerName || "N/A"}`, 14, 32);
+    doc.text(`Customer ID: ${customerId}`, 14, 38);
+    doc.text(`Date: ${new Date().toLocaleDateString("en-GB")}`, pageWidth - 14, 32, { align: "right" });
+
+    autoTable(doc, {
+      startY: 48, // gap between "Customer ID" line and the table
+      head: [["Sl", "Material Name", "Category", "Unit", "Total Qty"]],
+      body: rows
+    });
+
+    // Centered watermark logo on every page, including whichever pages
+    // autoTable ended up creating for a long items list. Done last so the
+    // final page count is known; the logo file is already pre-made
+    // transparent/faint, so no extra opacity is applied on top of it.
+    try {
+      const { dataUrl, aspect } = await loadWatermarkLogo();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const watermarkWidth = pageWidth * 0.6;
+      const watermarkHeight = watermarkWidth / aspect;
+      const x = (pageWidth - watermarkWidth) / 2;
+      const y = (pageHeight - watermarkHeight) / 2;
+
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let p = 1; p <= totalPages; p++) {
+        doc.setPage(p);
+        doc.addImage(dataUrl, "PNG", x, y, watermarkWidth, watermarkHeight);
+      }
+    } catch (err) {
+      // Missing/unreachable logo file shouldn't block the PDF download.
+      console.error("Failed to add watermark logo to PDF:", err);
+    }
+
+    doc.save(`material-items-${customerId}.pdf`);
+  };
+
   // View Mode / Usage Mode Filter: Only show items where quantity > 0 (unless
   // editing delivery where we need to see 0 qty items to add quantities)
     // Keeps each item paired with its real index in itemsList so edits/deletes
     // still target the correct row even after category/search/sort filtering.
+    // Extra Items rows are always excluded from the main table — they live
+    // exclusively in the separate Extra Items table below (usage mode only).
     const displayItems = useMemo(() => {
-      const withIndex = itemsList.map((item, idx) => ({ item, idx }));
+      const withIndex = itemsList
+        .map((item, idx) => ({ item, idx }))
+        .filter(({ item }) => item.category !== EXTRA_ITEM_CATEGORY);
 
       let filtered = mode === "delivery"
         ? withIndex
@@ -348,6 +547,17 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
       return filtered;
     }, [itemsList, mode, categoryFilter, searchTerm, sortOption]);
 
+  // Extra Items: usage-mode-only rows added via "Add Item", kept in their
+  // own table further down. Every column is editable while isEditing,
+  // regardless of category/search/sort filters above (those only apply to
+  // the main table).
+  const extraItems = useMemo(() => {
+    if (mode !== "usage") return [];
+    return itemsList
+      .map((item, idx) => ({ item, idx }))
+      .filter(({ item }) => item.category === EXTRA_ITEM_CATEGORY);
+  }, [itemsList, mode]);
+
   const columnCount = mode === "usage" ? 7 : (isEditing ? 6 : 5);
 
   if (loading || saving) {
@@ -368,13 +578,20 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
         </h2>
 
         <div className="material-item-header-actions">
+          
+          {mode === "delivery" && (
+          <button type="button" className="material-item-download-btn" onClick={handleDownloadPdf} title="Download PDF">
+            <FaDownload />
+          </button>
+          )}
+
           {!isEditing && canUpdate && (
             <button type="button" onClick={() => setIsEditing(true)}>
               <FaEdit className="icon-mr-6" />
             </button>
           )}
 
-          {isEditing && mode === "delivery" && (
+          {isEditing && (
             <button type="button" className="action-view-button material-item-add-btn" onClick={handleAddItemRow}>
               <FaPlus className="icon-mr-6" /> Add Item
             </button>
@@ -563,6 +780,129 @@ const MaterialItem = ({ customerId, canUpdate, mode = "delivery" }) => {
           </tbody>
         </table>
       </div>
+
+      {/* Extra Items — usage mode only. Rows added here (via "Add Item")
+          never appear in the main table above; every column is editable
+          while isEditing, regardless of what's typed anywhere else. */}
+      {mode === "usage" && extraItems.length > 0 && (
+        <div className="table-responsive-wrapper" style={{ marginTop: "24px" }}>
+          <h3 className="workspace-pane-title material-item-title" style={{ marginBottom: "10px" }}>
+            Extra Items
+          </h3>
+          <table className="directory-data-grid">
+            <thead>
+              <tr>
+                <th className="material-item-col-sl">Sl</th>
+                <th>Material Name</th>
+                <th className="material-item-col-unit">Unit</th>
+                <th className="material-item-col-qty">Total Qty</th>
+                <th className="material-item-col-usage">Used Qty</th>
+                <th className="material-item-col-usage">Remain Qty</th>
+                {isEditing && <th className="material-item-col-action">Action</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {extraItems.map(({ item, idx }, i) => (
+                  <tr key={item.id ?? `extra-row-${idx}`}>
+                    <td>{i + 1}</td>
+
+                    <td>
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          className="form-input"
+                          ref={(el) => (inputRefs.current[idx] = el)}
+                          value={item.material_name || ""}
+                          onChange={(e) => handleDeliveryChange(idx, "material_name", e.target.value)}
+                        />
+                      ) : (
+                        item.material_name || "Unnamed"
+                      )}
+                    </td>
+
+                    <td>
+                      {isEditing ? (
+                        <select
+                          className="control-select-dropdown"
+                          value={item.unit || "Nos."}
+                          onChange={(e) => handleDeliveryChange(idx, "unit", e.target.value)}
+                        >
+                          {UNIT_OPTIONS.map((unit) => (
+                            <option key={unit} value={unit}>{unit}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        item.unit
+                      )}
+                    </td>
+
+                    <td>
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          className="form-input"
+                          value={item.quantity}
+                          onChange={(e) => handleDeliveryChange(idx, "quantity", e.target.value)}
+                          onWheel={(e) => e.target.blur()}
+                        />
+                      ) : (
+                        item.quantity || "0"
+                      )}
+                    </td>
+
+                    <td>
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          min="0"
+                          max={item.quantity}
+                          step="any"
+                          className="form-input material-item-used-input"
+                          value={item.used_quantity ?? ""}
+                          onChange={(e) => handleUsageChange(idx, "used_quantity", e.target.value)}
+                          onWheel={(e) => e.target.blur()}
+                        />
+                      ) : (
+                        item.used_quantity || "0"
+                      )}
+                    </td>
+
+                    <td>
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          min="0"
+                          max={item.quantity}
+                          step="any"
+                          className="form-input material-item-remaining-input"
+                          value={item.remaining_quantity ?? ""}
+                          onChange={(e) => handleUsageChange(idx, "remaining_quantity", e.target.value)}
+                          onWheel={(e) => e.target.blur()}
+                        />
+                      ) : (
+                        item.remaining_quantity || "0"
+                      )}
+                    </td>
+
+                    {isEditing && (
+                      <td className="material-item-col-action">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveItemRow(idx)}
+                          className="payment-delete-card-btn material-item-delete-btn"
+                        >
+                          <FaTrash />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Standardized Footer Actions */}
       {isEditing && (

@@ -253,22 +253,22 @@ const DCR = ({ customerId, customer }) => {
             </div>
           </div>
 
-          <div className="detail-data-grid">
+          <div className="detail-data-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px" }}>
             <div className="detail-item-node">
               <span className="node-label">Certificate Received:</span>
-              <span className="node-value" style={{ color: dcrData?.certificate_received ? '#10b981' : '#ef4444' }}>
+              <span className={`status-badge-token-mnre ${dcrData?.certificate_received ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {dcrData?.certificate_received ? "Yes" : "No"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Certificate Claimed:</span>
-              <span className="node-value" style={{ color: dcrData?.certificate_claimed ? '#10b981' : '#ef4444' }}>
+              <span className={`status-badge-token-mnre ${dcrData?.certificate_claimed ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {dcrData?.certificate_claimed ? "Yes" : "No"}
               </span>
             </div>
             <div className="detail-item-node">
               <span className="node-label">Certificate Sold:</span>
-              <span className="node-value" style={{ color: dcrData?.certificate_sold ? '#10b981' : '#ef4444' }}>
+              <span className={`status-badge-token-mnre ${dcrData?.certificate_sold ? 'mnre-status-badge-completed' : 'mnre-status-badge-no'}`}>
                 {dcrData?.certificate_sold ? "Yes" : "No"}
               </span>
             </div>
