@@ -53,7 +53,7 @@ CORS(app, resources={
         "origins": [
             "http://localhost:5173", "http://127.0.0.1:5173",
             "http://localhost:4173", "http://127.0.0.1:4173",
-            "https://lavenir-solar-rho.vercel.app",
+            "https://lavenir-solar.vercel.app",
         ],
         "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # added PATCH
         "allow_headers": ["Content-Type", "Authorization"],
